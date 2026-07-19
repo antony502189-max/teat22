@@ -5,7 +5,7 @@ async (page) => {
   for (const viewport of widths) {
     await page.setViewportSize(viewport)
     for (const route of routes) {
-      await page.goto(`http://127.0.0.1:4173${route}`, { waitUntil: 'domcontentloaded' })
+      await page.goto(`http://127.0.0.1:4173/#${route}`, { waitUntil: 'domcontentloaded' })
       await page.addScriptTag({ path: 'node_modules/axe-core/axe.min.js' })
       const violations = await page.evaluate(async () => {
         const result = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] } })

@@ -24,7 +24,7 @@ async (page) => {
   for (const viewport of viewports) {
     await page.setViewportSize(viewport)
     for (const [name, route] of routes) {
-      await page.goto(`http://127.0.0.1:4173${route}`, { waitUntil: 'domcontentloaded' })
+      await page.goto(`http://127.0.0.1:4173/#${route}`, { waitUntil: 'domcontentloaded' })
       await page.locator('main').first().waitFor({ state: 'visible' })
       await page.evaluate(async () => {
         await document.fonts.ready

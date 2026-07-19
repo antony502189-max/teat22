@@ -102,7 +102,7 @@ async (page) => {
   for (const { width, height } of uniqueViewports) {
     await page.setViewportSize({ width, height })
     for (const [routeName, route] of routes) {
-      await page.goto(`http://127.0.0.1:4173${route}`)
+      await page.goto(`http://127.0.0.1:4173/#${route}`)
       await waitUntilReady()
       results.push(await inspect(`${width}x${height}`, routeName))
       if (width === 360 || width === 440) {
