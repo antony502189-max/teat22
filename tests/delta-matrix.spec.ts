@@ -143,6 +143,7 @@ test('ROOM-01..04 MODE-01..03 holiday wizard values persist and all new filters 
   await continueWizard(page, 2)
   await page.getByLabel('Tamaño aproximado').fill('19')
   await page.getByLabel('Personas que viven en casa').fill('3')
+  await page.getByLabel('Capacidad de la habitación').selectOption('2')
   await page.getByLabel('Ducha').selectOption('Ducha privada')
   await page.getByText('Lavadora', { exact: true }).click()
   await continueWizard(page, 1)
@@ -161,11 +162,12 @@ test('ROOM-01..04 MODE-01..03 holiday wizard values persist and all new filters 
   const listing = (await storedListings(page))[0]
   expect(listing).toMatchObject({
     rentalMode: 'holiday', roomSizeM2: 19, currentResidents: 3, roomCapacity: 2,
-    shower: 'Ducha privada', tenantRequirement: 'couple', couplesAllowed: true,
+    shower: 'Ducha privada', tenantRequirement: 'couple',
     nightlyPrice: 61, weeklyPrice: 360, monthlyPrice: 1200,
     minimumNights: 4, availableUntil: '2026-12-31',
   })
-  expect(listing.genderPreference).toBe('Sin preferencia de género')
+  expect(listing).not.toHaveProperty('genderPreference')
+  expect(listing).not.toHaveProperty('couplesAllowed')
   expect(listing.amenities.filter((item: string) => item === 'Lavadora')).toHaveLength(1)
 
   const query = '/#/buscar?alquiler=holiday&tamanoMin=19&tamanoMax=19&ducha=Ducha%20privada&residentes=3&capacidad=2&nochesMin=4&hasta=2026-12-31'
@@ -235,10 +237,10 @@ test('FILTER-02..06 new filters have chips, reset, reload and history navigation
   await expect(page).toHaveURL(/tamanoMin=18/)
   await expect.poll(() => resultCount(page)).toBeLessThan(baseline)
   await sidebar.getByLabel('Ducha').selectOption('Ducha privada')
-  await sidebar.getByLabel('Personas en la vivienda').selectOption('0')
+  await sidebar.getByLabel('Residentes actuales').selectOption('1')
   await sidebar.getByLabel('Capacidad de la habitación').selectOption('1')
   await expect(page).toHaveURL(/ducha=Ducha/)
-  await expect(page).toHaveURL(/residentes=0/)
+  await expect(page).toHaveURL(/residentes=1/)
   await expect(page).toHaveURL(/capacidad=1/)
   await expect(page.locator('.applied-filters')).toContainText('18–50 m²')
   await expect(page.locator('.applied-filters')).toContainText('Ducha')

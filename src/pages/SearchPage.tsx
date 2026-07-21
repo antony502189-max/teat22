@@ -12,6 +12,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useApp } from "@/contexts/app-context";
 import { areas, defaultFilters } from "@/data/listings";
+import { tenantRequirementLabels } from "@/lib/listings";
 import {
   filterListings,
   filtersFromParams,
@@ -80,6 +81,10 @@ export function SearchPage() {
   }, [paramString]);
 
   useLayoutEffect(() => {
+    if (["genero", "parejas", "ocupantes"].some((name) => params.has(name))) {
+      setParams(filtersToParams(filters, new URLSearchParams(params)), { replace: true });
+      return;
+    }
     if (query !== storedQuery) setQuery(query);
     if (rentalMode !== storedRentalMode) setRentalMode(rentalMode);
     if (JSON.stringify(filters) !== JSON.stringify(storedFilters))
@@ -241,18 +246,16 @@ export function SearchPage() {
       ["roomType", "Habitación"],
       ["available", "Fecha"],
       ["minStay", "Estancia"],
-      ["gender", "Preferencia"],
+      ["tenantRequirement", "Requisito"],
       ["bathroom", "Baño"],
       ["kitchen", "Cocina"],
       ["deposit", "Fianza"],
-      ["occupants", "Ocupantes"],
       ["shower", "Ducha"],
       ["currentResidents", "Residentes"],
       ["roomCapacity", "Capacidad"],
       ["availableUntil", "Disponible hasta"],
       ["smoking", "Fumar"],
       ["pets", "Mascotas"],
-      ["couples", "Parejas"],
       ["children", "Niños"],
       ["empadronamiento", "Empadronamiento"],
       ["publicationDate", "Publicado"],
@@ -262,7 +265,7 @@ export function SearchPage() {
       if (filters[key] !== defaultFilters[key] && filters[key] !== "")
         chips.push({
           key: String(key),
-          label: `${prefix}: ${String(filters[key])}`,
+          label: `${prefix}: ${key === "tenantRequirement" && filters.tenantRequirement !== "Cualquiera" ? tenantRequirementLabels[filters.tenantRequirement] : key === "currentResidents" && filters.currentResidents === "5+" ? "5 o más" : key === "roomCapacity" ? `${filters.roomCapacity} ${filters.roomCapacity === "1" ? "persona" : "personas"}` : String(filters[key])}`,
           clear: () => setOne(key, defaultFilters[key]),
         });
     });
@@ -478,6 +481,7 @@ export function SearchPage() {
                   selectedId={selected}
                   onSelect={setSelected}
                   fullScreen
+                  fitResultsKey={mapBounds ? 1 : 0}
                   onBoundsSearch={(bounds) => {
                     setMapBounds(bounds);
                     updateParams((next) => next.delete("pagina"), true);

@@ -34,6 +34,8 @@ function mediaId(reference: string) {
   return reference.slice(MEDIA_PREFIX.length)
 }
 
+const mediaReference = (id: IDBValidKey) => `${MEDIA_PREFIX}${String(id)}`
+
 export function isMediaReference(value?: string): value is string {
   return Boolean(value?.startsWith(MEDIA_PREFIX))
 }
@@ -98,4 +100,29 @@ export async function removeMediaReferences(references: string[]) {
   if (results.some((result) => result.status === 'rejected')) {
     throw new MediaStorageError('unavailable', 'No se pudieron limpiar algunas imágenes locales.')
   }
+}
+
+export async function getAllMediaReferences() {
+  const database = await openDatabase()
+  try {
+    return await new Promise<string[]>((resolve, reject) => {
+      const request = database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAllKeys()
+      request.onsuccess = () => resolve(request.result.map(mediaReference))
+      request.onerror = () => reject(request.error)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+export async function removeUnusedMediaReferences(references: string[], usedReferences: Iterable<string>) {
+  const used = new Set([...usedReferences].filter(isMediaReference))
+  return removeMediaReferences(references.filter((reference) => isMediaReference(reference) && !used.has(reference)))
+}
+
+export async function cleanupOrphanedMedia(usedReferences: Iterable<string>) {
+  const used = new Set(usedReferences)
+  const stored = await getAllMediaReferences()
+  await removeUnusedMediaReferences(stored, used)
+  return stored.filter((reference) => !used.has(reference))
 }

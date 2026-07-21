@@ -4,6 +4,27 @@ import type { Filters, Listing, MapPolygonPoint, RentalMode, YesNoAny } from '@/
 
 const boolMatches = (value: boolean, filter: YesNoAny) => filter === 'Cualquiera' || value === (filter === 'Sí')
 
+export function normalizeFilters(value: unknown): Filters {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const next: Filters = { ...defaultFilters, areas: [], conditions: [], amenities: [] }
+  for (const key of Object.keys(defaultFilters) as (keyof Filters)[]) {
+    const candidate = source[key]
+    const fallback = defaultFilters[key]
+    if (Array.isArray(fallback)) {
+      if (Array.isArray(candidate) && candidate.every((item) => typeof item === 'string')) (next[key] as string[]) = candidate
+    } else if (typeof candidate === typeof fallback) {
+      ;(next as unknown as Record<string, unknown>)[key] = candidate
+    }
+  }
+  if (!source.tenantRequirement) {
+    if (source.gender === 'Solo hombre') next.tenantRequirement = 'single-man'
+    else if (source.gender === 'Solo mujer') next.tenantRequirement = 'single-woman'
+    else if (source.couples === 'Sí') next.tenantRequirement = 'couple'
+  }
+  if (!source.currentResidents && source.occupants === '5 o más') next.currentResidents = '5+'
+  return next
+}
+
 export function filterListings(items: Listing[], mode: RentalMode, filters: Filters) {
   const today = Date.now()
   return items.filter((listing) => {
@@ -18,7 +39,7 @@ export function filterListings(items: Listing[], mode: RentalMode, filters: Filt
       if (listing.minimumStayMonths > requested) return false
     }
     if (filters.conditions.length && !filters.conditions.every((condition) => listing.restrictions.includes(condition))) return false
-    if (filters.gender !== 'Cualquiera' && listing.genderPreference !== filters.gender) return false
+    if (filters.tenantRequirement !== 'Cualquiera' && listing.tenantRequirement !== filters.tenantRequirement) return false
     if (filters.bathroom !== 'Cualquiera' && listing.bathroom !== filters.bathroom) return false
     if (filters.kitchen !== 'Cualquiera' && listing.kitchen !== filters.kitchen) return false
     if (filters.furnished && !listing.furnished) return false
@@ -26,18 +47,15 @@ export function filterListings(items: Listing[], mode: RentalMode, filters: Filt
     if (filters.deposit === 'Sin fianza' && listing.depositAmount !== 0) return false
     if (filters.deposit === 'Hasta 1 mes' && listing.depositAmount > primaryPrice) return false
     if (filters.deposit === 'Más de 1 mes' && listing.depositAmount <= primaryPrice) return false
-    if (filters.occupants === '1–2' && listing.currentResidents > 2) return false
-    if (filters.occupants === '3–4' && (listing.currentResidents < 3 || listing.currentResidents > 4)) return false
-    if (filters.occupants === '5 o más' && listing.currentResidents < 5) return false
     if (listing.roomSizeM2 < filters.roomSizeMin || listing.roomSizeM2 > filters.roomSizeMax) return false
     if (filters.shower !== 'Cualquiera' && listing.shower !== filters.shower) return false
-    if (filters.currentResidents !== 'Cualquiera' && listing.currentResidents !== Number(filters.currentResidents)) return false
+    if (filters.currentResidents === '5+' && listing.currentResidents < 5) return false
+    if (filters.currentResidents !== 'Cualquiera' && filters.currentResidents !== '5+' && listing.currentResidents !== Number(filters.currentResidents)) return false
     if (filters.roomCapacity !== 'Cualquiera' && listing.roomCapacity !== Number(filters.roomCapacity)) return false
     if (mode === 'holiday' && filters.minimumNights > 0 && (listing.minimumNights ?? 1) > filters.minimumNights) return false
     if (mode === 'holiday' && filters.availableUntil && (!listing.availableUntil || listing.availableUntil < filters.availableUntil)) return false
     if (!boolMatches(listing.smokingAllowed, filters.smoking)) return false
     if (!boolMatches(listing.petsAllowed, filters.pets)) return false
-    if (!boolMatches(listing.couplesAllowed, filters.couples)) return false
     if (!boolMatches(listing.childrenAllowed, filters.children)) return false
     if (!boolMatches(listing.empadronamientoAllowed, filters.empadronamiento)) return false
     if (filters.advertiserType !== 'Cualquiera' && listing.advertiserType !== filters.advertiserType) return false
@@ -69,13 +87,12 @@ export function getActiveFilterKeys(filters: Filters) {
   if (filters.available) keys.push('available')
   if (filters.minStay !== defaultFilters.minStay) keys.push('minStay')
   if (filters.conditions.length) keys.push('conditions')
-  if (filters.gender !== defaultFilters.gender) keys.push('gender')
+  if (filters.tenantRequirement !== defaultFilters.tenantRequirement) keys.push('tenantRequirement')
   if (filters.bathroom !== defaultFilters.bathroom) keys.push('bathroom')
   if (filters.kitchen !== defaultFilters.kitchen) keys.push('kitchen')
   if (filters.furnished) keys.push('furnished')
   if (filters.billsIncluded) keys.push('billsIncluded')
   if (filters.deposit !== defaultFilters.deposit) keys.push('deposit')
-  if (filters.occupants !== defaultFilters.occupants) keys.push('occupants')
   if (filters.roomSizeMin !== defaultFilters.roomSizeMin || filters.roomSizeMax !== defaultFilters.roomSizeMax) keys.push('roomSize')
   if (filters.shower !== defaultFilters.shower) keys.push('shower')
   if (filters.currentResidents !== defaultFilters.currentResidents) keys.push('currentResidents')
@@ -84,7 +101,6 @@ export function getActiveFilterKeys(filters: Filters) {
   if (filters.availableUntil !== defaultFilters.availableUntil) keys.push('availableUntil')
   if (filters.smoking !== defaultFilters.smoking) keys.push('smoking')
   if (filters.pets !== defaultFilters.pets) keys.push('pets')
-  if (filters.couples !== defaultFilters.couples) keys.push('couples')
   if (filters.children !== defaultFilters.children) keys.push('children')
   if (filters.empadronamiento !== defaultFilters.empadronamiento) keys.push('empadronamiento')
   if (filters.publicationDate !== defaultFilters.publicationDate) keys.push('publicationDate')
@@ -97,9 +113,9 @@ const listFields: (keyof Filters)[] = ['areas', 'conditions', 'amenities']
 const booleanFields: (keyof Filters)[] = ['furnished', 'billsIncluded']
 const numericFields: (keyof Filters)[] = ['minPrice', 'maxPrice', 'roomSizeMin', 'roomSizeMax', 'minimumNights']
 const paramNames: Partial<Record<keyof Filters, string>> = {
-  minPrice: 'precioMin', maxPrice: 'precioMax', areas: 'zonas', roomType: 'habitacion', available: 'fecha', minStay: 'estancia', conditions: 'condiciones', gender: 'genero',
-  bathroom: 'bano', kitchen: 'cocina', furnished: 'amueblada', billsIncluded: 'gastos', deposit: 'fianza', occupants: 'ocupantes', smoking: 'fumar', pets: 'mascotas',
-  couples: 'parejas', children: 'ninos', empadronamiento: 'padron', publicationDate: 'publicado', advertiserType: 'anunciante', amenities: 'servicios', sort: 'orden',
+  minPrice: 'precioMin', maxPrice: 'precioMax', areas: 'zonas', roomType: 'habitacion', available: 'fecha', minStay: 'estancia', conditions: 'condiciones', tenantRequirement: 'requisito',
+  bathroom: 'bano', kitchen: 'cocina', furnished: 'amueblada', billsIncluded: 'gastos', deposit: 'fianza', smoking: 'fumar', pets: 'mascotas',
+  children: 'ninos', empadronamiento: 'padron', publicationDate: 'publicado', advertiserType: 'anunciante', amenities: 'servicios', sort: 'orden',
   roomSizeMin: 'tamanoMin', roomSizeMax: 'tamanoMax', shower: 'ducha', currentResidents: 'residentes', roomCapacity: 'capacidad', minimumNights: 'nochesMin', availableUntil: 'hasta',
 }
 
@@ -113,10 +129,22 @@ export function filtersFromParams(params: URLSearchParams): Filters {
     else if (numericFields.includes(key)) (next[key] as number) = Number(raw)
     else (next[key] as string) = raw
   })
-  return next
+  if (!params.has('requisito')) {
+    const legacyGender = params.get('genero')
+    const legacyCouples = params.get('parejas')
+    if (legacyGender === 'Solo hombre') next.tenantRequirement = 'single-man'
+    else if (legacyGender === 'Solo mujer') next.tenantRequirement = 'single-woman'
+    else if (legacyCouples === 'Sí') next.tenantRequirement = 'couple'
+  }
+  if (!params.has('residentes')) {
+    const legacyResidents = params.get('ocupantes')
+    if (legacyResidents === '5 o más') next.currentResidents = '5+'
+  }
+  return normalizeFilters(next)
 }
 
 export function filtersToParams(filters: Filters, params = new URLSearchParams()) {
+  ;['genero', 'parejas', 'ocupantes'].forEach((name) => params.delete(name))
   ;(Object.keys(paramNames) as (keyof Filters)[]).forEach((key) => {
     const name = paramNames[key] ?? key
     const value = filters[key]

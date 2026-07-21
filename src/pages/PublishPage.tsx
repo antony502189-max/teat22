@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,10 +47,11 @@ import {
   PropertyCard,
   PropertyGallery,
 } from "@/components/marketplace";
+import { ApproximateLocationMap } from "@/components/map-view";
 import { useApp } from "@/contexts/app-context";
 import { areaCenters, createDefaultDraft } from "@/data/listings";
 import { getCriticalRestrictions, getPrimaryPrice } from "@/lib/listings";
-import { removeMedia, removeMediaReferences } from "@/lib/media-storage";
+import { removeUnusedMediaReferences } from "@/lib/media-storage";
 import type { DemoUser, Listing, ListingDraft } from "@/types";
 
 const steps = [
@@ -75,6 +76,7 @@ const toDraft = (listing: Listing): ListingDraft => ({
   street: "",
   postcode: "",
   coordinates: listing.coordinates,
+  locationManuallyMoved: true,
   roomType: listing.roomType,
   roomSizeM2: listing.roomSizeM2,
   currentResidents: listing.currentResidents,
@@ -95,11 +97,9 @@ const toDraft = (listing: Listing): ListingDraft => ({
   minimumStayMonths: listing.minimumStayMonths,
   minimumNights: listing.minimumNights ?? 1,
   expiresAt: listing.expiresAt,
-  genderPreference: listing.genderPreference,
   tenantRequirement: listing.tenantRequirement,
   smokingAllowed: listing.smokingAllowed,
   petsAllowed: listing.petsAllowed,
-  couplesAllowed: listing.couplesAllowed,
   childrenAllowed: listing.childrenAllowed,
   empadronamientoAllowed: listing.empadronamientoAllowed,
   rules: listing.homeDescription,
@@ -162,17 +162,14 @@ const toListing = (draft: ListingDraft, previous?: Listing, ownerUserId?: string
     bathroom: draft.bathroom,
     kitchen: draft.kitchen,
     furnished: draft.furnished,
-    occupants: draft.currentResidents,
     roomSizeM2: draft.roomSizeM2,
     currentResidents: draft.currentResidents,
     roomCapacity: draft.roomCapacity,
     shower: draft.shower,
     coordinates: draft.coordinates,
-    genderPreference: draft.genderPreference,
     tenantRequirement: draft.tenantRequirement,
     smokingAllowed: draft.smokingAllowed,
     petsAllowed: draft.petsAllowed,
-    couplesAllowed: draft.couplesAllowed,
     childrenAllowed: draft.childrenAllowed,
     empadronamientoAllowed: draft.empadronamientoAllowed,
     restrictions: [],
@@ -244,8 +241,8 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
     try {
       const saved = localStorage.getItem(draftKey);
       if (saved) {
-        const parsed = JSON.parse(saved) as { version?: number; data?: Partial<ListingDraft> };
-        if (parsed.version === 3 && parsed.data) return { ...defaults, ...parsed.data };
+        const parsed = JSON.parse(saved) as { version?: number; ownerUserId?: string; listingId?: string; data?: Partial<ListingDraft> };
+        if (parsed.version === 3 && parsed.data && (!parsed.ownerUserId || parsed.ownerUserId === currentUser?.id)) return { ...defaults, ...parsed.data };
       }
       const legacy = localStorage.getItem(legacyDraftKey);
       return legacy ? { ...defaults, ...(JSON.parse(legacy) as Partial<ListingDraft>) } : defaults;
@@ -259,15 +256,19 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [published, setPublished] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
-  const pendingMediaRemovals = useRef(new Set<string>());
+  const nonDraftMedia = useMemo(() => {
+    const references = new Set(allListings.flatMap((listing) => listing.images));
+    if (currentUser?.avatarRef) references.add(currentUser.avatarRef);
+    return references;
+  }, [allListings, currentUser?.avatarRef]);
   const isDirty = JSON.stringify(draft) !== baseline;
   const set = <K extends keyof ListingDraft>(key: K, value: ListingDraft[K]) =>
     setDraft((current) => ({ ...current, [key]: value }));
   const preview = useMemo(() => toListing(draft, existing, currentUser?.id), [draft, existing, currentUser?.id]);
   useEffect(() => {
-    try { localStorage.setItem(draftKey, JSON.stringify({ version: 3, data: draft })); }
+    try { localStorage.setItem(draftKey, JSON.stringify({ version: 3, ownerUserId: currentUser?.id, listingId: existing?.id, data: draft })); }
     catch { toast.error("No se pudo guardar el borrador. Revisa el espacio disponible.", { id: "draft-storage-error" }); }
-  }, [draft]);
+  }, [currentUser?.id, draft, existing?.id]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (isDirty && !published) event.preventDefault();
@@ -295,7 +296,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
     if (step === 1 && !draft.area.trim())
       next.area = "Indica la zona o barrio.";
     if (step === 2 && draft.currentResidents < 0)
-      next.occupants = "El número de residentes no puede ser negativo.";
+      next.currentResidents = "El número de residentes no puede ser negativo.";
     if (step === 3 && getPrimaryPrice(preview) < 1)
       next.price = "El precio debe ser mayor que cero.";
     if (step === 4 && !draft.availableFrom)
@@ -338,13 +339,6 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
       updateListing(existing.id, listing);
       toast.success("Cambios publicados");
     } else createListing(listing);
-    const obsoleteMedia = [...pendingMediaRemovals.current].filter(
-      (reference) => !draft.images.includes(reference),
-    );
-    pendingMediaRemovals.current.clear();
-    void removeMediaReferences(obsoleteMedia).catch((error) =>
-      toast.error(error instanceof Error ? error.message : "No se pudieron limpiar las imágenes locales."),
-    );
     localStorage.removeItem(draftKey);
     setBaseline(JSON.stringify(draft));
     setPublished(true);
@@ -355,8 +349,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
     const transientMedia = draft.images.filter(
       (reference) => !retained.has(reference) && !existing?.images.includes(reference),
     );
-    pendingMediaRemovals.current.clear();
-    void removeMediaReferences(transientMedia).catch((error) =>
+    void removeUnusedMediaReferences(transientMedia, nonDraftMedia).catch((error) =>
       toast.error(error instanceof Error ? error.message : "No se pudieron limpiar las imágenes locales."),
     );
     setDraft(fresh);
@@ -364,7 +357,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
     setMaxVisited(0);
     setErrors({});
     setBaseline(JSON.stringify(fresh));
-    localStorage.setItem(draftKey, JSON.stringify({ version: 3, data: fresh }));
+    localStorage.setItem(draftKey, JSON.stringify({ version: 3, ownerUserId: currentUser?.id, listingId: existing?.id, data: fresh }));
     toast.success("Borrador restablecido");
   };
 
@@ -466,7 +459,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
                   }
                   onChange={(event) => {
                     const area = event.target.value;
-                    setDraft((current) => ({ ...current, area, coordinates: areaCenters[area] ?? current.coordinates }));
+                    setDraft((current) => ({ ...current, area, coordinates: current.locationManuallyMoved ? current.coordinates : areaCenters[area] ?? current.coordinates }));
                   }}
                 />
               </FormField>
@@ -498,12 +491,27 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
             <fieldset className="approximate-location-selector">
               <legend>Selecciona un punto aproximado</legend>
               <p>El marcador se centra en la zona. Muévelo ligeramente sin publicar la calle exacta.</p>
+              <ApproximateLocationMap
+                coordinates={draft.coordinates}
+                onChange={(coordinates) => setDraft((current) => ({ ...current, coordinates, locationManuallyMoved: true }))}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!areaCenters[draft.area]}
+                onClick={() => {
+                  const center = areaCenters[draft.area];
+                  if (center) setDraft((current) => ({ ...current, coordinates: center, locationManuallyMoved: false }));
+                }}
+              >
+                Centrar de nuevo en la zona
+              </Button>
               <div className="approximate-location-selector__grid" aria-label={`Punto aproximado: ${draft.coordinates.lat.toFixed(4)}, ${draft.coordinates.lng.toFixed(4)}`}>
-                <Button type="button" variant="outline" aria-label="Mover punto al norte" onClick={() => set("coordinates", { ...draft.coordinates, lat: draft.coordinates.lat + 0.002 })}>Norte</Button>
-                <Button type="button" variant="outline" aria-label="Mover punto al oeste" onClick={() => set("coordinates", { ...draft.coordinates, lng: draft.coordinates.lng - 0.002 })}>Oeste</Button>
+                <Button type="button" variant="outline" aria-label="Mover punto al norte" onClick={() => setDraft((current) => ({ ...current, locationManuallyMoved: true, coordinates: { ...current.coordinates, lat: current.coordinates.lat + 0.002 } }))}>Norte</Button>
+                <Button type="button" variant="outline" aria-label="Mover punto al oeste" onClick={() => setDraft((current) => ({ ...current, locationManuallyMoved: true, coordinates: { ...current.coordinates, lng: current.coordinates.lng - 0.002 } }))}>Oeste</Button>
                 <span className="approximate-location-selector__marker"><MapPin aria-hidden="true" /></span>
-                <Button type="button" variant="outline" aria-label="Mover punto al este" onClick={() => set("coordinates", { ...draft.coordinates, lng: draft.coordinates.lng + 0.002 })}>Este</Button>
-                <Button type="button" variant="outline" aria-label="Mover punto al sur" onClick={() => set("coordinates", { ...draft.coordinates, lat: draft.coordinates.lat - 0.002 })}>Sur</Button>
+                <Button type="button" variant="outline" aria-label="Mover punto al este" onClick={() => setDraft((current) => ({ ...current, locationManuallyMoved: true, coordinates: { ...current.coordinates, lng: current.coordinates.lng + 0.002 } }))}>Este</Button>
+                <Button type="button" variant="outline" aria-label="Mover punto al sur" onClick={() => setDraft((current) => ({ ...current, locationManuallyMoved: true, coordinates: { ...current.coordinates, lat: current.coordinates.lat - 0.002 } }))}>Sur</Button>
               </div>
               <output aria-live="polite">Coordenadas aproximadas: {draft.coordinates.lat.toFixed(4)}, {draft.coordinates.lng.toFixed(4)}</output>
             </fieldset>
@@ -549,20 +557,21 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
               </FormField>
               <FormField
                 label="Personas que viven en casa"
-                htmlFor="publish-occupants"
-                error={errors.occupants}
+                htmlFor="publish-residents"
+                error={errors.currentResidents}
               >
                 <Input
-                  id="publish-occupants"
+                  id="publish-residents"
                   type="number"
                   min="0"
                   value={draft.currentResidents}
-                  aria-invalid={Boolean(errors.occupants)}
+                  aria-invalid={Boolean(errors.currentResidents)}
+                  aria-describedby={errors.currentResidents ? "publish-residents-error" : undefined}
                   onChange={(e) => set("currentResidents", Number(e.target.value))}
                 />
               </FormField>
               <FormField label="Capacidad de la habitación" htmlFor="publish-capacity">
-                <select id="publish-capacity" value={draft.roomCapacity} disabled={draft.tenantRequirement !== "any"} onChange={(e) => set("roomCapacity", Number(e.target.value) as 1 | 2)}>
+                <select id="publish-capacity" value={draft.roomCapacity} onChange={(e) => set("roomCapacity", Number(e.target.value) as 1 | 2)}>
                   <option value="1">1 persona</option><option value="2">2 personas</option>
                 </select>
               </FormField>
@@ -721,12 +730,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
               <select
                 id="publish-tenant-requirement"
                 value={draft.tenantRequirement}
-                onChange={(e) => {
-                  const requirement = e.target.value as ListingDraft["tenantRequirement"];
-                  const roomCapacity = requirement === "couple" ? 2 : requirement === "any" ? draft.roomCapacity : 1;
-                  const genderPreference = requirement === "single-man" ? "Solo hombre" : requirement === "single-woman" ? "Solo mujer" : "Sin preferencia de género";
-                  setDraft((current) => ({ ...current, tenantRequirement: requirement, roomCapacity, couplesAllowed: requirement === "couple", genderPreference }));
-                }}
+                onChange={(e) => set("tenantRequirement", e.target.value as ListingDraft["tenantRequirement"])}
               >
                 <option value="single-man">Solo un hombre</option>
                 <option value="single-woman">Solo una mujer</option>
@@ -774,8 +778,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
               images={draft.images}
               onChange={(images) => set("images", images)}
               onRemove={(image) => {
-                if (existing?.images.includes(image)) pendingMediaRemovals.current.add(image);
-                else void removeMedia(image).catch((error) =>
+                if (!existing?.images.includes(image)) void removeUnusedMediaReferences([image], nonDraftMedia).catch((error) =>
                   toast.error(error instanceof Error ? error.message : "No se pudo limpiar la imagen local."),
                 );
               }}
@@ -1037,7 +1040,7 @@ export function PublishPage({ editing = false }: { editing?: boolean }) {
             variant="outline"
             onClick={() => {
               try {
-                localStorage.setItem(draftKey, JSON.stringify({ version: 3, data: draft }));
+                localStorage.setItem(draftKey, JSON.stringify({ version: 3, ownerUserId: currentUser?.id, listingId: existing?.id, data: draft }));
                 setBaseline(JSON.stringify(draft));
                 toast.success("Borrador guardado");
               } catch {

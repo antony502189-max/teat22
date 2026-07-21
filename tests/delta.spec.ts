@@ -308,7 +308,11 @@ test('RESP-01..05 critical routes have no horizontal overflow at the required ma
   await page.goto('/#/')
   await page.evaluate(() => localStorage.setItem('112233:session:v1', JSON.stringify('host-demo')))
   await page.reload()
-  const routes = ['/#/', '/#/buscar?q=Tenerife&alquiler=long', '/#/buscar?q=Tenerife&alquiler=long&vista=mapa', `/#/habitacion/${encodeURIComponent(firstListingId)}`, '/#/publicar']
+  const routes = [
+    '/#/', '/#/buscar?q=Tenerife&alquiler=long', '/#/buscar?q=Tenerife&alquiler=long&vista=mapa',
+    `/#/habitacion/${encodeURIComponent(firstListingId)}`, '/#/favoritos', '/#/busquedas-guardadas',
+    '/#/perfil', '/#/mis-anuncios', '/#/publicar', `/#/mis-anuncios/${encodeURIComponent(firstListingId)}/editar`,
+  ]
   for (const [width, height] of viewports) {
     await page.setViewportSize({ width, height })
     for (const route of routes) {
@@ -317,6 +321,14 @@ test('RESP-01..05 critical routes have no horizontal overflow at the required ma
       if (route.includes('vista=mapa')) await page.locator('.leaflet-map-canvas').waitFor({ state: 'visible' })
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `${route} at ${width}x${height}`).toBeTruthy()
     }
+    await page.evaluate(() => localStorage.setItem('112233:session:v1', JSON.stringify(null)))
+    await page.reload()
+    for (const route of ['/#/acceso', '/#/registro']) {
+      await page.goto(route)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `${route} at ${width}x${height}`).toBeTruthy()
+    }
+    await page.evaluate(() => localStorage.setItem('112233:session:v1', JSON.stringify('host-demo')))
+    await page.reload()
     if (width <= 390) {
       await page.goto(`/#/habitacion/${encodeURIComponent(firstListingId)}`)
       const contact = await page.locator('.mobile-contact-bar').boundingBox()

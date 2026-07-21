@@ -71,7 +71,12 @@ test('11–15 mapa Leaflet, кластер, выбор, границы и пол
   await page.getByRole('button', { name: /añadir punto/i }).click()
   await page.getByRole('button', { name: /finalizar/i }).click()
   await expect(page).toHaveURL(/poligono=/)
-  await page.getByRole('button', { name: /buscar en esta zona/i }).click()
+  const searchArea = page.getByRole('button', { name: /buscar en esta zona/i })
+  await expect(searchArea).toBeDisabled()
+  await page.locator('.leaflet-control-zoom-in').focus()
+  await page.locator('.leaflet-control-zoom-in').press('Enter')
+  await expect(searchArea).toBeEnabled()
+  await searchArea.click()
   await expect(page.getByRole('button', { name: /eliminar zona/i })).toBeVisible()
 })
 

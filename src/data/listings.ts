@@ -56,10 +56,16 @@ const legacyPlaceIndices = [1, 3, 5, 7, 6, 2, 0, 4]
 
 const rotatePhotos = (index: number) => Array.from({ length: 6 }, (_, offset) => photos[(index + offset * 2) % photos.length])
 
-const buildRestrictions = (index: number, mode: Listing['rentalMode']) => {
-  const gender = index % 5 === 0 ? 'Solo mujer' : index % 7 === 0 ? 'Solo hombre' : 'Sin preferencia de género'
-  const restrictions = [gender]
-  restrictions.push(index % 3 === 0 ? 'Parejas permitidas' : 'No parejas')
+const tenantLabels: Record<Listing['tenantRequirement'], string> = {
+  'single-man': 'Solo un hombre',
+  'single-woman': 'Solo una mujer',
+  'single-person': 'Una persona',
+  couple: 'Solo pareja',
+  any: 'Sin restricción',
+}
+
+const buildRestrictions = (index: number, mode: Listing['rentalMode'], tenantRequirement: Listing['tenantRequirement']) => {
+  const restrictions = [tenantLabels[tenantRequirement]]
   restrictions.push(index % 4 === 0 ? 'Mascotas permitidas' : 'Sin mascotas')
   restrictions.push(index % 6 === 0 ? 'Se puede fumar' : 'No fumar')
   restrictions.push(index % 2 === 0 ? 'Empadronamiento posible' : 'Sin empadronamiento')
@@ -79,7 +85,7 @@ export const initialListings: Listing[] = Array.from({ length: 32 }, (_, index) 
   const tenantRequirement: Listing['tenantRequirement'] = index % 5 === 0 ? 'single-woman' : index % 7 === 0 ? 'single-man' : index % 3 === 0 ? 'couple' : 'any'
   const roomCapacity: Listing['roomCapacity'] = tenantRequirement === 'couple' || (tenantRequirement === 'any' && index % 4 === 1) ? 2 : 1
   const publishedDate = new Date(Date.UTC(2026, 6, 20 - (index % 31), 12 - (index % 8)))
-  const restrictions = buildRestrictions(index, rentalMode)
+  const restrictions = buildRestrictions(index, rentalMode, tenantRequirement)
   const [ownerName, initials] = owners[index % owners.length]
   return {
     id: legacyIds[index] ?? `${place[1].toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-')}-${String(index + 1).padStart(2, '0')}`,
@@ -107,17 +113,14 @@ export const initialListings: Listing[] = Array.from({ length: 32 }, (_, index) 
     bathroom: index % 4 === 2 ? 'Baño privado' : 'Baño compartido',
     kitchen: index % 9 === 5 ? 'Cocina privada' : 'Cocina compartida',
     furnished: index % 11 !== 0,
-    occupants: 1 + (index % 6),
     roomSizeM2: 9 + (index % 10),
     currentResidents: 1 + (index % 6),
     roomCapacity,
     shower: index % 4 === 2 ? 'Ducha privada' : 'Ducha compartida',
     coordinates: { lat: place[2] + ((index % 3) - 1) * 0.0045, lng: place[3] + ((index % 4) - 1.5) * 0.004 },
-    genderPreference: restrictions[0] as Listing['genderPreference'],
     tenantRequirement,
     smokingAllowed: restrictions.includes('Se puede fumar'),
     petsAllowed: restrictions.includes('Mascotas permitidas'),
-    couplesAllowed: restrictions.includes('Parejas permitidas'),
     childrenAllowed: index % 6 === 1,
     empadronamientoAllowed: restrictions.includes('Empadronamiento posible'),
     restrictions,
@@ -153,13 +156,12 @@ export const defaultFilters: Filters = {
   available: '',
   minStay: 'Cualquiera',
   conditions: [],
-  gender: 'Cualquiera',
+  tenantRequirement: 'Cualquiera',
   bathroom: 'Cualquiera',
   kitchen: 'Cualquiera',
   furnished: false,
   billsIncluded: false,
   deposit: 'Cualquiera',
-  occupants: 'Cualquiera',
   roomSizeMin: 0,
   roomSizeMax: 50,
   shower: 'Cualquiera',
@@ -169,7 +171,6 @@ export const defaultFilters: Filters = {
   availableUntil: '',
   smoking: 'Cualquiera',
   pets: 'Cualquiera',
-  couples: 'Cualquiera',
   children: 'Cualquiera',
   empadronamiento: 'Cualquiera',
   publicationDate: 'Cualquiera',
@@ -179,10 +180,10 @@ export const defaultFilters: Filters = {
 }
 
 export const createDefaultDraft = (): ListingDraft => ({
-  rentalMode: 'long', city: 'Adeje', area: 'Armeñime', street: '', postcode: '38678', coordinates: areaCenters['Armeñime'], roomType: 'Habitación individual', roomSizeM2: 12, currentResidents: 4, roomCapacity: 1,
+  rentalMode: 'long', city: 'Adeje', area: 'Armeñime', street: '', postcode: '38678', coordinates: areaCenters['Armeñime'], locationManuallyMoved: false, roomType: 'Habitación individual', roomSizeM2: 12, currentResidents: 4, roomCapacity: 1,
   bathroom: 'Baño compartido', shower: 'Ducha compartida', kitchen: 'Cocina compartida', furnished: true, amenities: ['Fibra', 'Escritorio', 'Armario'], monthlyPrice: 450, nightlyPrice: 55, weeklyPrice: 330, depositAmount: 450,
   billsIncluded: true, billsNote: 'Todo incluido con uso responsable', availableFrom: '2026-08-01', availableUntil: '2026-12-20', minimumStayMonths: 3, minimumNights: 3, expiresAt: '2026-10-01',
-  genderPreference: 'Sin preferencia de género', tenantRequirement: 'single-person', smokingAllowed: false, petsAllowed: false, couplesAllowed: false, childrenAllowed: false, empadronamientoAllowed: true,
+  tenantRequirement: 'single-person', smokingAllowed: false, petsAllowed: false, childrenAllowed: false, empadronamientoAllowed: true,
   rules: 'Buscamos una convivencia tranquila. Se respetan los horarios de descanso y se organizan turnos de limpieza.', images: rotatePhotos(0),
   title: 'Habitación luminosa con escritorio y gastos incluidos', description: 'Habitación exterior y tranquila en una casa compartida bien cuidada. Dispone de cama, armario y zona de trabajo.',
   contactName: 'Equipo Casa Norte', contactPhone: '+34 600 112 233', contactWhatsapp: '+34 611 223 344', contactEmail: 'anuncios@example.es', showPhone: true, showWhatsApp: true, allowContactForm: true, status: 'Publicado',

@@ -652,7 +652,6 @@ export function ErrorState() {
 }
 
 const filterConditions = [
-  "Parejas permitidas",
   "Mascotas permitidas",
   "No fumar",
   "Empadronamiento posible",
@@ -687,7 +686,7 @@ function NativeSelect({
 }: {
   label: string;
   value: string;
-  options: string[];
+  options: Array<string | { value: string; label: string }>;
   onChange: (value: string) => void;
 }) {
   const id = useId();
@@ -699,9 +698,10 @@ function NativeSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
-        {options.map((option) => (
-          <option key={option}>{option}</option>
-        ))}
+        {options.map((option) => {
+          const item = typeof option === "string" ? { value: option, label: option } : option;
+          return <option key={item.value} value={item.value}>{item.label}</option>;
+        })}
       </select>
     </label>
   );
@@ -794,15 +794,17 @@ function FilterPanel({
           onChange={(next) => update("roomType", next)}
         />
         <NativeSelect
-          label="Preferencia de ocupación"
-          value={value.gender}
+          label="Requisito para la persona inquilina"
+          value={value.tenantRequirement}
           options={[
             "Cualquiera",
-            "Solo hombre",
-            "Solo mujer",
-            "Sin preferencia de género",
+            { value: "single-man", label: "Solo un hombre" },
+            { value: "single-woman", label: "Solo una mujer" },
+            { value: "single-person", label: "Una persona" },
+            { value: "couple", label: "Solo pareja" },
+            { value: "any", label: "Sin restricción" },
           ]}
-          onChange={(next) => update("gender", next as Filters["gender"])}
+          onChange={(next) => update("tenantRequirement", next as Filters["tenantRequirement"])}
         />
         <div className="form-grid form-grid--compact">
           <label className="field-label">
@@ -814,7 +816,7 @@ function FilterPanel({
             <Input type="number" min="1" max="50" value={value.roomSizeMax} onChange={(event) => update("roomSizeMax", Number(event.target.value))} />
           </label>
         </div>
-        <NativeSelect label="Capacidad de la habitación" value={value.roomCapacity} options={["Cualquiera", "1", "2"]} onChange={(next) => update("roomCapacity", next)} />
+        <NativeSelect label="Capacidad de la habitación" value={value.roomCapacity} options={["Cualquiera", { value: "1", label: "1 persona" }, { value: "2", label: "2 personas" }]} onChange={(next) => update("roomCapacity", next)} />
       </section>
       <Separator />
       <section className="filter-section">
@@ -888,11 +890,6 @@ function FilterPanel({
           onChange={(next) => update("pets", next)}
         />
         <YesNoFilter
-          label="Parejas"
-          value={value.couples}
-          onChange={(next) => update("couples", next)}
-        />
-        <YesNoFilter
           label="Niños"
           value={value.children}
           onChange={(next) => update("children", next)}
@@ -962,9 +959,9 @@ function FilterPanel({
           onChange={(next) => update("deposit", next)}
         />
         <NativeSelect
-          label="Personas en la vivienda"
+          label="Residentes actuales"
           value={value.currentResidents}
-          options={["Cualquiera", "0", "1", "2", "3", "4", "5", "6"]}
+          options={["Cualquiera", "1", "2", "3", "4", { value: "5+", label: "5 o más" }]}
           onChange={(next) => update("currentResidents", next)}
         />
         <NativeSelect
@@ -1107,6 +1104,7 @@ export function MapView(props: {
   showPreview?: boolean;
   onBoundsSearch?: (bounds: import("@/components/map-view").MapBounds) => void;
   onPolygonSearch?: (polygon: MapPolygonPoint[]) => void;
+  fitResultsKey?: number;
 }) {
   return (
     <Suspense
@@ -1256,11 +1254,13 @@ export function ContactPanel({
   const [confirmed, setConfirmed] = useState(false);
   const [phone, setPhone] = useState(false);
   const [messageOpen, setMessageOpen] = useState(false);
+  const [messageSending, setMessageSending] = useState(false);
   const [messageStatus, setMessageStatus] = useState("");
   const [messageErrors, setMessageErrors] = useState<Record<string, string>>({});
   const [messageForm, setMessageForm] = useState({ name: "", contact: "", message: "", website: "", confirmed: false });
   const messageStartedAt = useRef(Date.now());
   const messageFormRef = useRef<HTMLFormElement>(null);
+  const messageTimerRef = useRef<number | null>(null);
   const checkboxId = useId();
   const confirmationText = buildContactConfirmationText(listing);
   useEffect(() => {
@@ -1269,6 +1269,9 @@ export function ContactPanel({
     setMessageOpen(false);
     setMessageStatus("");
   }, [listing.id]);
+  useEffect(() => () => {
+    if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+  }, []);
   const contactText = encodeURIComponent(
     `Hola, me interesa la habitación de ${listing.area}. ¿Sigue disponible?`,
   );
@@ -1283,18 +1286,26 @@ export function ContactPanel({
     if (messageForm.message.trim().length < 10) next.message = "Escribe al menos 10 caracteres.";
     if (messageForm.message.length > 1000) next.message = "El mensaje no puede superar 1000 caracteres.";
     if (!messageForm.confirmed) next.confirmed = "Confirma las condiciones del anuncio.";
-    const signature = `${messageForm.contact.trim().toLocaleLowerCase()}|${messageForm.message.trim().toLocaleLowerCase()}`;
-    const previous = contactSubmissions.get(listing.id);
+    const contactIdentity = messageForm.contact.trim().toLocaleLowerCase();
+    const signature = messageForm.message.trim().toLocaleLowerCase();
+    const contactKey = `${listing.id}:${contactIdentity}`;
+    const previous = contactSubmissions.get(contactKey);
     if (previous && Date.now() - previous.time < 30_000) next.form = previous.signature === signature ? "Este mismo mensaje ya se ha registrado. Espera 30 segundos." : "Espera 30 segundos antes de enviar otro mensaje.";
     setMessageErrors(next);
     if (Object.keys(next).length) {
       setMessageStatus("Corrige los campos indicados.");
-      requestAnimationFrame(() => messageFormRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+      requestAnimationFrame(() => (messageFormRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? messageFormRef.current?.querySelector<HTMLElement>('input:not([name="website"])'))?.focus());
       return;
     }
-    contactSubmissions.set(listing.id, { time: Date.now(), signature });
-    setMessageStatus("Mensaje guardado solo en esta demo local. No se ha enviado por internet.");
-    setMessageForm((current) => ({ ...current, message: "", website: "", confirmed: false }));
+    contactSubmissions.set(contactKey, { time: Date.now(), signature });
+    setMessageSending(true);
+    setMessageStatus("Registrando el mensaje local…");
+    messageTimerRef.current = window.setTimeout(() => {
+      setMessageSending(false);
+      setMessageStatus("Mensaje guardado solo en esta demo local. No se ha enviado por internet.");
+      setMessageForm((current) => ({ ...current, message: "", website: "", confirmed: false }));
+      messageTimerRef.current = null;
+    }, 250);
   };
   return (
     <aside
@@ -1365,9 +1376,12 @@ export function ContactPanel({
           setMessageOpen(open);
           if (open) messageStartedAt.current = Date.now();
           else {
+            if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+            messageTimerRef.current = null;
+            setMessageSending(false);
             setMessageErrors({});
             setMessageStatus("");
-            setMessageForm((current) => ({ ...current, website: "", confirmed: false }));
+            setMessageForm({ name: "", contact: "", message: "", website: "", confirmed: false });
           }
         }}>
           <DialogTrigger asChild><Button variant="outline"><MessageCircle data-icon="inline-start" />Enviar mensaje</Button></DialogTrigger>
@@ -1378,25 +1392,25 @@ export function ContactPanel({
             </DialogHeader>
             <form ref={messageFormRef} className="contact-message-form" onSubmit={submitMessage} noValidate>
               <label className="field-label">Nombre
-                <Input value={messageForm.name} aria-invalid={Boolean(messageErrors.name)} aria-describedby={messageErrors.name ? "contact-name-error" : undefined} onChange={(event) => updateMessage("name", event.target.value)} />
+                <Input name="name" autoComplete="name" value={messageForm.name} aria-invalid={Boolean(messageErrors.name)} aria-describedby={messageErrors.name ? "contact-name-error" : undefined} onChange={(event) => updateMessage("name", event.target.value)} />
                 {messageErrors.name ? <span id="contact-name-error" className="field-error">{messageErrors.name}</span> : null}
               </label>
               <label className="field-label">Email o teléfono
-                <Input value={messageForm.contact} aria-invalid={Boolean(messageErrors.contact)} aria-describedby={messageErrors.contact ? "contact-detail-error" : undefined} onChange={(event) => updateMessage("contact", event.target.value)} />
+                <Input name="contact" autoComplete="email" value={messageForm.contact} aria-invalid={Boolean(messageErrors.contact)} aria-describedby={messageErrors.contact ? "contact-detail-error" : undefined} onChange={(event) => updateMessage("contact", event.target.value)} />
                 {messageErrors.contact ? <span id="contact-detail-error" className="field-error">{messageErrors.contact}</span> : null}
               </label>
               <label className="field-label">Mensaje
                 <Textarea minLength={10} maxLength={1000} rows={5} value={messageForm.message} aria-invalid={Boolean(messageErrors.message)} aria-describedby={messageErrors.message ? "contact-message-error" : undefined} onChange={(event) => updateMessage("message", event.target.value)} />
                 {messageErrors.message ? <span id="contact-message-error" className="field-error">{messageErrors.message}</span> : <span className="field-hint">{messageForm.message.length}/1000</span>}
               </label>
-              <label className="honeypot-field" aria-hidden="true">Sitio web<Input tabIndex={-1} autoComplete="off" value={messageForm.website} onChange={(event) => updateMessage("website", event.target.value)} /></label>
+              <label className="honeypot-field">Sitio web<Input name="website" tabIndex={-1} autoComplete="url" value={messageForm.website} onChange={(event) => updateMessage("website", event.target.value)} /></label>
               <label className="condition-confirm">
-                <Checkbox checked={messageForm.confirmed} aria-invalid={Boolean(messageErrors.confirmed)} onCheckedChange={(value) => updateMessage("confirmed", value === true)} />
+                <Checkbox checked={messageForm.confirmed} aria-invalid={Boolean(messageErrors.confirmed)} aria-describedby={messageErrors.confirmed ? "contact-confirm-error" : undefined} onCheckedChange={(value) => updateMessage("confirmed", value === true)} />
                 <span>{confirmationText}</span>
               </label>
-              {messageErrors.confirmed ? <span className="field-error">{messageErrors.confirmed}</span> : null}
-              <div className="contact-message-status" role={messageStatus.startsWith("Mensaje guardado") ? "status" : "alert"} aria-live="polite">{messageErrors.form || messageStatus}</div>
-              <DialogFooter><Button type="submit">Registrar mensaje</Button></DialogFooter>
+              {messageErrors.confirmed ? <span id="contact-confirm-error" className="field-error">{messageErrors.confirmed}</span> : null}
+              {(messageErrors.form || messageStatus) ? <div className="contact-message-status" role={messageErrors.form || Object.keys(messageErrors).length ? "alert" : "status"} aria-live="polite">{messageErrors.form || messageStatus}</div> : null}
+              <DialogFooter><Button type="submit" disabled={messageSending}>{messageSending ? "Registrando…" : "Registrar mensaje"}</Button></DialogFooter>
             </form>
           </DialogContent>
         </Dialog> : null}

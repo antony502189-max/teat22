@@ -42,7 +42,14 @@ export function buildContactConfirmationText(listing: Listing) {
   return `Confirmo que cumplo estas condiciones: ${conditions.join(', ')}${conditions.length && last ? ' y ' : ''}${last ?? ''}.`
 }
 
-export function inferTenantRequirement(listing: Partial<Listing>): TenantRequirement {
+type LegacyListing = Partial<Listing> & {
+  size?: number
+  occupants?: number
+  genderPreference?: string
+  couplesAllowed?: boolean
+}
+
+function inferTenantRequirement(listing: LegacyListing): TenantRequirement {
   if (listing.tenantRequirement) return listing.tenantRequirement
   if (listing.genderPreference === 'Solo hombre') return 'single-man'
   if (listing.genderPreference === 'Solo mujer') return 'single-woman'
@@ -74,14 +81,10 @@ export function isListingLike(value: unknown): value is Partial<Listing> & Pick<
 
 export function normalizeListing(value: unknown): Listing | null {
   if (!isListingLike(value)) return null
-  const legacy = value as Partial<Listing> & { size?: number }
+  const legacy = value as LegacyListing
   const rentalMode = value.rentalMode
   const tenantRequirement = inferTenantRequirement(legacy)
-  const roomCapacity: 1 | 2 = tenantRequirement === 'couple'
-    ? 2
-    : tenantRequirement === 'any'
-      ? legacy.roomCapacity === 2 ? 2 : 1
-      : 1
+  const roomCapacity: 1 | 2 = legacy.roomCapacity === 2 || (!legacy.roomCapacity && tenantRequirement === 'couple') ? 2 : 1
   const price = typeof legacy.price === 'number' ? legacy.price : 0
   const monthlyPrice = typeof legacy.monthlyPrice === 'number'
     ? legacy.monthlyPrice
@@ -115,7 +118,6 @@ export function normalizeListing(value: unknown): Listing | null {
     bathroom: legacy.bathroom ?? 'Baño compartido',
     kitchen: legacy.kitchen ?? 'Cocina compartida',
     furnished: legacy.furnished ?? true,
-    occupants: typeof legacy.occupants === 'number' ? legacy.occupants : 1,
     roomSizeM2: typeof legacy.roomSizeM2 === 'number' ? legacy.roomSizeM2 : typeof legacy.size === 'number' ? legacy.size : 12,
     currentResidents: typeof legacy.currentResidents === 'number' ? legacy.currentResidents : typeof legacy.occupants === 'number' ? legacy.occupants : 1,
     roomCapacity,
@@ -123,11 +125,9 @@ export function normalizeListing(value: unknown): Listing | null {
     coordinates: legacy.coordinates && typeof legacy.coordinates.lat === 'number' && typeof legacy.coordinates.lng === 'number'
       ? legacy.coordinates
       : { lat: 28.2916, lng: -16.6291 },
-    genderPreference: legacy.genderPreference ?? 'Sin preferencia de género',
     tenantRequirement,
     smokingAllowed: Boolean(legacy.smokingAllowed),
     petsAllowed: Boolean(legacy.petsAllowed),
-    couplesAllowed: tenantRequirement === 'couple' || (tenantRequirement === 'any' && Boolean(legacy.couplesAllowed)),
     childrenAllowed: Boolean(legacy.childrenAllowed),
     empadronamientoAllowed: Boolean(legacy.empadronamientoAllowed),
     restrictions: Array.isArray(legacy.restrictions) ? legacy.restrictions : [],

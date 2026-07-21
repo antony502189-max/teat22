@@ -34,7 +34,11 @@ test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
   runtimeErrors.set(page, errors);
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    if (message.type() !== "error") return;
+    const url = message.location().url;
+    const externalMediaFailure = message.text().startsWith("Failed to load resource:")
+      && ["images.unsplash.com", "tile.openstreetmap.org"].some((host) => url.includes(host));
+    if (!externalMediaFailure) errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
   await clean(page);
@@ -133,8 +137,8 @@ test("04 every visible filter is wired to data and URL", async ({ page }) => {
     /condiciones=/,
   );
   await changed(
-    () => select(/Preferencia de ocupación/i, "Solo mujer"),
-    /genero=/,
+    () => select(/Requisito para la persona inquilina/i, "single-woman"),
+    /requisito=single-woman/,
   );
   await changed(() => select(/^Baño$/, "Baño privado"), /bano=/);
   await changed(() => select(/^Cocina$/, "Cocina privada"), /cocina=/);
@@ -147,10 +151,9 @@ test("04 every visible filter is wired to data and URL", async ({ page }) => {
     /gastos=1/,
   );
   await changed(() => select(/Depósito/i, "Sin fianza"), /fianza=/);
-  await changed(() => select(/Personas en la vivienda/i, "1"), /residentes=1/);
+  await changed(() => select(/Residentes actuales/i, "1"), /residentes=1/);
   await changed(() => select(/Se puede fumar/i, "Sí"), /fumar=/);
   await changed(() => select(/^Mascotas$/, "Sí"), /mascotas=/);
-  await changed(() => select(/^Parejas$/, "No"), /parejas=/);
   await changed(() => select(/^Niños$/, "Sí"), /ninos=/);
   await changed(() => select(/^Empadronamiento$/, "Sí"), /padron=/);
   await changed(() => select(/^Publicado$/, "24h"), /publicado=24h/);

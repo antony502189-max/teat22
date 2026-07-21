@@ -1,9 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { defaultFilters, initialListings } from '@/data/listings'
 import { expireListing, isListingLike, normalizeListing } from '@/lib/listings'
-import { getActiveFilterKeys } from '@/lib/search'
-import { removeMediaReferences } from '@/lib/media-storage'
+import { getActiveFilterKeys, normalizeFilters } from '@/lib/search'
+import { cleanupOrphanedMedia, isMediaReference, removeUnusedMediaReferences } from '@/lib/media-storage'
 import { parseJson, persistJson, persistVersioned, readJson, readVersioned, type StorageFailure } from '@/lib/storage'
 import type { DemoUser, Filters, Listing, ListingStatus, MapPolygonPoint, RentalMode, ReportRecord, UserRole } from '@/types'
 
@@ -72,6 +72,30 @@ interface AppState {
 const AppContext = createContext<AppState | null>(null)
 const LISTINGS_KEY = '112233:listings:v3'
 const LISTINGS_VERSION = 3
+const DRAFT_KEY = '112233:listing-draft:v3'
+const LEGACY_DRAFT_KEY = '112233:listing-draft:v2'
+
+function collectMediaReferences(value: unknown, found = new Set<string>()) {
+  if (typeof value === 'string') {
+    if (isMediaReference(value)) found.add(value)
+    return found
+  }
+  if (Array.isArray(value)) value.forEach((item) => collectMediaReferences(item, found))
+  else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach((item) => collectMediaReferences(item, found))
+  return found
+}
+
+function readDraftRecord() {
+  for (const key of [DRAFT_KEY, LEGACY_DRAFT_KEY]) {
+    const parsed = parseJson<Record<string, unknown>>(localStorage.getItem(key))
+    if (parsed.data) return { key, value: parsed.data }
+  }
+  return null
+}
+
+function usedMediaReferences(listings: Listing[], users: DemoUser[], draft: unknown = readDraftRecord()?.value) {
+  return collectMediaReferences([listings, users, draft])
+}
 
 const demoUsers: DemoUser[] = [
   { id: 'tenant-demo', name: 'Lucía Demo', email: 'inquilina@112233.es', password: 'demo112233', role: 'tenant', phone: '+34 600 000 112', whatsapp: '+34 600 000 112', telegram: '@lucia_demo', about: 'Busco una habitación tranquila en Tenerife.', initials: 'LD', showPhone: true, showWhatsApp: true, allowContactForm: true, allowMessaging: true },
@@ -110,10 +134,12 @@ function readScopedStrings(key: string, legacyKey: string) {
 
 function readScopedSavedSearches() {
   const current = readVersioned('112233:saved-searches:v3', 3, {} as UserScopedState<SavedSearch[]>, isScopedSavedSearches)
-  if (localStorage.getItem('112233:saved-searches:v3') && !current.failure) return current.data
+  if (localStorage.getItem('112233:saved-searches:v3') && !current.failure) {
+    return Object.fromEntries(Object.entries(current.data).map(([scope, items]) => [scope, items.map((item) => ({ ...item, filters: normalizeFilters(item.filters) }))]))
+  }
   const legacy = readJson<unknown>('112233:saved-searches:v2', [])
   const items = Array.isArray(legacy.data) ? legacy.data.filter(isSavedSearch) : []
-  return items.length ? { guest: items } : {}
+  return items.length ? { guest: items.map((item) => ({ ...item, filters: normalizeFilters(item.filters) })) } : {}
 }
 
 function normalizeUsers(value: DemoUser[]) {
@@ -145,6 +171,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<DemoUser[]>(() => normalizeUsers(readJson<DemoUser[]>('112233:users:v1', demoUsers).data))
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => readJson<string | null>('112233:session:v1', null).data)
   const [storageError, setStorageError] = useState<string | null>(() => listingLoad.failure ? storageMessage(listingLoad.failure) : null)
+  const orphanCleanupStarted = useRef(false)
 
   const currentUser = users.find((user) => user.id === currentUserId) ?? null
   const scopeKey = currentUserId ?? 'guest'
@@ -178,6 +205,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => reportStorageFailure(persistJson('112233:reports:v1', reports)), [reports, reportStorageFailure])
   useEffect(() => reportStorageFailure(persistJson('112233:users:v1', users)), [users, reportStorageFailure])
   useEffect(() => reportStorageFailure(persistJson('112233:session:v1', currentUserId)), [currentUserId, reportStorageFailure])
+  useEffect(() => {
+    if (orphanCleanupStarted.current) return
+    orphanCleanupStarted.current = true
+    void cleanupOrphanedMedia(usedMediaReferences(allListings, users)).catch(() => undefined)
+  }, [allListings, users])
 
   const updateScope = useCallback(<T,>(setter: React.Dispatch<React.SetStateAction<UserScopedState<T>>>, update: (current: T | undefined) => T) => {
     setter((current) => ({ ...current, [scopeKey]: update(current[scopeKey]) }))
@@ -208,7 +240,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [filters, mapPolygon, query, rentalMode, updateScope])
   const restoreSavedSearch = useCallback((id: string) => {
     const found = savedSearches.find((item) => item.id === id)
-    if (found) { setQuery(found.query); setRentalMode(found.rentalMode); setFilters({ ...defaultFilters, ...found.filters }); setMapPolygonState(found.polygon ?? []) }
+    if (found) { setQuery(found.query); setRentalMode(found.rentalMode); setFilters(normalizeFilters(found.filters)); setMapPolygonState(found.polygon ?? []) }
     return found
   }, [savedSearches])
   const removeSavedSearch = useCallback((id: string) => updateScope(setSavedSearchScopes, (current) => (current ?? []).filter((item) => item.id !== id)), [updateScope])
@@ -228,7 +260,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = mutate(listing)
     return next ? [next] : []
   })), [canManageListing])
-  const updateListing = useCallback((id: string, listing: Listing) => mutateOwned(id, (current) => ({ ...listing, id: current.id, ownerUserId: current.ownerUserId })), [mutateOwned])
+  const updateListing = useCallback((id: string, listing: Listing) => {
+    const previous = allListings.find((item) => item.id === id)
+    if (!previous || !canManageListing(previous)) {
+      if (previous) toast.error('No puedes gestionar un anuncio de otra cuenta.')
+      return
+    }
+    const next = { ...listing, id: previous.id, ownerUserId: previous.ownerUserId }
+    setAllListings((current) => current.map((item) => item.id === id ? next : item))
+    const used = usedMediaReferences(allListings.map((item) => item.id === id ? next : item), users)
+    void removeUnusedMediaReferences(previous.images.filter((image) => !next.images.includes(image)), used).catch((error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudieron limpiar las imágenes locales.'),
+    )
+  }, [allListings, canManageListing, users])
   const deleteListing = useCallback((id: string) => {
     const listing = allListings.find((item) => item.id === id)
     if (!listing) return
@@ -236,11 +280,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toast.error('No puedes gestionar un anuncio de otra cuenta.')
       return
     }
-    setAllListings((current) => current.filter((item) => item.id !== id))
-    void removeMediaReferences(listing.images).catch((error) =>
+    const remaining = allListings.filter((item) => item.id !== id)
+    const draftRecord = readDraftRecord()
+    const deleteDraft = draftRecord?.value.listingId === id
+    const draftMedia = deleteDraft ? collectMediaReferences(draftRecord?.value) : new Set<string>()
+    if (deleteDraft) {
+      localStorage.removeItem(DRAFT_KEY)
+      localStorage.removeItem(LEGACY_DRAFT_KEY)
+    }
+    setAllListings(remaining)
+    void removeUnusedMediaReferences([...listing.images, ...draftMedia], usedMediaReferences(remaining, users, deleteDraft ? null : draftRecord?.value)).catch((error) =>
       toast.error(error instanceof Error ? error.message : 'No se pudieron limpiar las imágenes locales.'),
     )
-  }, [allListings, canManageListing])
+  }, [allListings, canManageListing, users])
   const setListingStatus = useCallback((id: string, status: ListingStatus) => mutateOwned(id, (listing) => ({ ...listing, status, closedReason: status === 'Finalizado' ? listing.closedReason : undefined })), [mutateOwned])
   const renewListing = useCallback((id: string) => mutateOwned(id, (listing) => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -271,14 +323,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => setCurrentUserId(null), [])
   const updateProfile = useCallback((changes: ProfileUpdate) => {
     if (!currentUserId) return
-    setUsers((current) => current.map((user) => user.id === currentUserId ? { ...user, ...changes } : user))
+    const previous = users.find((user) => user.id === currentUserId)
+    const nextUsers = users.map((user) => user.id === currentUserId ? { ...user, ...changes } : user)
+    setUsers(nextUsers)
+    if (previous?.avatarRef && Object.prototype.hasOwnProperty.call(changes, 'avatarRef') && changes.avatarRef !== previous.avatarRef) {
+      void removeUnusedMediaReferences([previous.avatarRef], usedMediaReferences(allListings, nextUsers)).catch((error) =>
+        toast.error(error instanceof Error ? error.message : 'No se pudo limpiar el avatar anterior.'),
+      )
+    }
     toast.success('Perfil actualizado')
-  }, [currentUserId])
+  }, [allListings, currentUserId, users])
   const deleteAccount = useCallback(() => {
     if (!currentUserId) return
-    setUsers((current) => current.filter((user) => user.id !== currentUserId))
+    const ownedListings = allListings.filter((listing) => listing.ownerUserId === currentUserId)
+    const remainingListings = allListings.filter((listing) => listing.ownerUserId !== currentUserId)
+    const remainingUsers = users.filter((user) => user.id !== currentUserId)
+    const draftRecord = readDraftRecord()
+    const draftOwner = draftRecord?.value.ownerUserId
+    const deleteDraft = Boolean(draftRecord && (!draftOwner || draftOwner === currentUserId))
+    const removedMedia = collectMediaReferences([ownedListings, users.find((user) => user.id === currentUserId), deleteDraft ? draftRecord?.value : null])
+    const retainedDraft = deleteDraft ? null : draftRecord?.value
+    setAllListings(remainingListings)
+    setUsers(remainingUsers)
+    setFavoriteScopes((current) => Object.fromEntries(Object.entries(current).filter(([scope]) => scope !== currentUserId)))
+    setDiscardedScopes((current) => Object.fromEntries(Object.entries(current).filter(([scope]) => scope !== currentUserId)))
+    setHistoryScopes((current) => Object.fromEntries(Object.entries(current).filter(([scope]) => scope !== currentUserId)))
+    setSavedSearchScopes((current) => Object.fromEntries(Object.entries(current).filter(([scope]) => scope !== currentUserId)))
+    setReports((current) => current.filter((report) => !ownedListings.some((listing) => listing.id === report.listingId)))
+    if (deleteDraft) {
+      localStorage.removeItem(DRAFT_KEY)
+      localStorage.removeItem(LEGACY_DRAFT_KEY)
+    }
     setCurrentUserId(null)
-  }, [currentUserId])
+    void removeUnusedMediaReferences([...removedMedia], usedMediaReferences(remainingListings, remainingUsers, retainedDraft)).catch((error) =>
+      toast.error(error instanceof Error ? error.message : 'No se pudieron limpiar todos los datos multimedia de la cuenta.'),
+    )
+  }, [allListings, currentUserId, users])
   const toggleUserBlocked = useCallback((id: string) => setUsers((current) => current.map((user) => user.id === id ? { ...user, blocked: !user.blocked } : user)), [])
 
   const activeFilterCount = useMemo(() => getActiveFilterKeys(filters).length, [filters])

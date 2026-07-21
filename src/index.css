@@ -438,6 +438,9 @@
 .approximate-location-selector { display: flex; flex-direction: column; gap: .75rem; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .approximate-location-selector legend { padding-inline: .25rem; font-weight: 720; }
 .approximate-location-selector p, .approximate-location-selector output { color: var(--ink-muted); font-size: .78rem; }
+.approximate-location-map { width: 100%; min-height: 15rem; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-muted); }
+.approximate-location-map .leaflet-control-attribution { font-size: .62rem; }
+.approximate-location-selector > .button { align-self: flex-start; }
 .approximate-location-selector__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; align-items: center; }
 .approximate-location-selector__grid > :first-child { grid-column: 2; }
 .approximate-location-selector__grid > :nth-child(2) { grid-column: 1; }
@@ -456,6 +459,10 @@
   .publish-header__actions .dirty-state { width: 100%; text-align: right; }
   .approximate-location-selector { padding: .75rem; }
   .approximate-location-selector__grid .button { padding-inline: .35rem; }
+  .map-search-tools .button, .avatar-actions .button, .avatar-actions .button-like, .danger-zone .button { min-height: 2.75rem; }
+  .map-search-tools [data-slot="button"], .avatar-actions [data-slot="button"], .danger-zone [data-slot="button"] { min-height: 2.75rem; }
+  .upload-grid > div > button, .upload-reorder button { min-width: 2.75rem; min-height: 2.75rem; }
+  .upload-grid .make-cover { width: auto; }
   .manage-card { max-width: 100%; overflow: hidden; }
 }
 
@@ -515,7 +522,7 @@
   .map-results-split .idealista-map-view { width: 100%; height: 100%; margin: 0; border: 0; }
   .leaflet-map-shell { min-height: 20rem; }
   .map-search-tools { top: .5rem; right: .5rem; left: .5rem; max-width: none; overflow-x: auto; transform: none; scrollbar-width: none; }
-  .map-search-tools .button { flex: none; min-height: 2.5rem; padding-inline: .6rem; font-size: .75rem; }
+  .map-search-tools .button { flex: none; min-height: 2.75rem; padding-inline: .6rem; font-size: .75rem; }
   .map-selected-card { bottom: .5rem; left: .5rem; width: calc(100% - 1rem); grid-template-columns: 5.75rem minmax(0, 1fr) auto; }
   .map-selected-card img { width: 5.75rem; height: 4.75rem; }
   .admin-header { align-items: stretch; }
@@ -851,7 +858,7 @@ h2 { font-size: clamp(1.35rem, 2vw, 1.8rem); line-height: 1.18; letter-spacing: 
   .is-map-page .map-location-list { padding-bottom: .05rem; }
   .map-search-tools { top: .45rem; right: .45rem; left: .45rem; max-width: none; overflow-x: auto; transform: none; scrollbar-width: none; }
   .map-search-tools::-webkit-scrollbar { display: none; }
-  .map-search-tools .button { min-height: 2.5rem; padding-inline: .55rem; font-size: .75rem; }
+  .map-search-tools .button { min-height: 2.75rem; padding-inline: .55rem; font-size: .75rem; }
   .map-search-tools .button svg { width: .9rem; }
   .map-draw-layer > span { top: 4rem; width: max-content; max-width: calc(100% - 1rem); }
   .map-selected-card { bottom: .5rem; left: .5rem; width: calc(100% - 1rem); min-height: 6rem; grid-template-columns: 6.25rem minmax(0, 1fr) auto; }

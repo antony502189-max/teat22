@@ -261,7 +261,6 @@ export function ProfilePage() {
       focusField("phone");
       return;
     }
-    const previousAvatar = currentUser.avatarRef;
     updateProfile({
       name,
       phone,
@@ -273,9 +272,6 @@ export function ProfilePage() {
       allowContactForm: profileDraft.allowContactForm,
       avatarRef: profileDraft.avatarRef,
     });
-    if (previousAvatar && previousAvatar !== profileDraft.avatarRef) {
-      void removeMedia(previousAvatar).catch(() => toast.error("No se pudo limpiar el avatar anterior."));
-    }
     setEditing(false);
   };
   return (
@@ -448,7 +444,7 @@ export function ProfilePage() {
                 </Button>
               }
               title="¿Eliminar tu cuenta?"
-              description="La cuenta local se borrará. Esta acción no se puede deshacer."
+              description="Se eliminarán esta cuenta local, su sesión, anuncios, borrador, búsquedas, favoritos, historial y archivos multimedia sin uso. Esta acción no se puede deshacer."
               confirmLabel="Eliminar definitivamente"
               destructive
               onConfirm={() => {
@@ -468,11 +464,12 @@ export function MyListingsPage() {
     useApp();
   const [status, setStatus] = useState("Todos");
   useEffect(() => refreshListingLifecycle(), [refreshListingLifecycle]);
+  const visibleStatus = (listingStatus: typeof allListings[number]["status"]) => listingStatus === "Pendiente" ? "Borrador" : listingStatus === "Rechazado" ? "Oculto" : listingStatus;
   const mine = allListings.filter((listing) => listing.ownerUserId === currentUser?.id);
   const items =
     status === "Todos"
       ? mine
-      : mine.filter((listing) => listing.status === status);
+      : mine.filter((listing) => visibleStatus(listing.status) === status);
   return (
     <div className="container account-page">
       <AccountHeader
@@ -496,12 +493,10 @@ export function MyListingsPage() {
           onChange={(event) => setStatus(event.target.value)}
         >
           <option>Todos</option>
-          <option>Pendiente</option>
           <option>Publicado</option>
           <option>Oculto</option>
           <option>Borrador</option>
           <option>Finalizado</option>
-          <option>Rechazado</option>
         </select>
       </div>
       {items.length ? (
@@ -533,7 +528,7 @@ export function MyListingsPage() {
               />
               <div className="manage-card__main">
                 <div>
-                  <StatusBadge status={listing.status} />
+                  <StatusBadge status={visibleStatus(listing.status)} />
                   <span>Ref. {listing.id.slice(-5).toUpperCase()}</span>
                 </div>
                 <h2>{listing.title}</h2>

@@ -2,9 +2,9 @@ export type RentalMode = 'long' | 'holiday'
 export type ListingStatus = 'Borrador' | 'Pendiente' | 'Publicado' | 'Oculto' | 'Finalizado' | 'Rechazado'
 export type UserRole = 'tenant' | 'host' | 'admin'
 export type AdvertiserType = 'Particular' | 'Profesional'
-export type GenderPreference = 'Cualquiera' | 'Solo hombre' | 'Solo mujer' | 'Sin preferencia de género'
 export type YesNoAny = 'Cualquiera' | 'Sí' | 'No'
 export type TenantRequirement = 'single-man' | 'single-woman' | 'single-person' | 'couple' | 'any'
+export type TenantRequirementFilter = TenantRequirement | 'Cualquiera'
 export type ShowerType = 'Ducha privada' | 'Ducha compartida'
 
 export interface Owner {
@@ -46,17 +46,14 @@ export interface Listing {
   bathroom: 'Baño privado' | 'Baño compartido'
   kitchen: 'Cocina privada' | 'Cocina compartida'
   furnished: boolean
-  occupants: number
   roomSizeM2: number
   currentResidents: number
   roomCapacity: 1 | 2
   shower: ShowerType
   coordinates: Coordinates
-  genderPreference: GenderPreference
   tenantRequirement: TenantRequirement
   smokingAllowed: boolean
   petsAllowed: boolean
-  couplesAllowed: boolean
   childrenAllowed: boolean
   empadronamientoAllowed: boolean
   restrictions: string[]
@@ -90,13 +87,12 @@ export interface Filters {
   available: string
   minStay: string
   conditions: string[]
-  gender: GenderPreference
+  tenantRequirement: TenantRequirementFilter
   bathroom: string
   kitchen: string
   furnished: boolean
   billsIncluded: boolean
   deposit: string
-  occupants: string
   roomSizeMin: number
   roomSizeMax: number
   shower: string
@@ -106,7 +102,6 @@ export interface Filters {
   availableUntil: string
   smoking: YesNoAny
   pets: YesNoAny
-  couples: YesNoAny
   children: YesNoAny
   empadronamiento: YesNoAny
   publicationDate: string
@@ -143,6 +138,7 @@ export interface ListingDraft {
   street: string
   postcode: string
   coordinates: Coordinates
+  locationManuallyMoved: boolean
   roomType: Listing['roomType']
   roomSizeM2: number
   currentResidents: number
@@ -163,11 +159,9 @@ export interface ListingDraft {
   minimumStayMonths: number
   minimumNights: number
   expiresAt: string
-  genderPreference: GenderPreference
   tenantRequirement: TenantRequirement
   smokingAllowed: boolean
   petsAllowed: boolean
-  couplesAllowed: boolean
   childrenAllowed: boolean
   empadronamientoAllowed: boolean
   rules: string
