@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console'
 
 const runtimeErrors = new WeakMap<Page, string[]>()
 
@@ -20,7 +21,9 @@ const login = async (page: Page, role: 'tenant' | 'host' | 'admin' = 'tenant') =
 test.beforeEach(async ({ page }) => {
   const errors: string[] = []
   runtimeErrors.set(page, errors)
-  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !isExpectedHeadlessVectorFallback(message.text())) errors.push(message.text())
+  })
   page.on('pageerror', (error) => errors.push(error.message))
   await reset(page)
 })

@@ -6,8 +6,8 @@ import { useApp } from '@/contexts/app-context'
 import { getPrimaryPrice } from '@/lib/listings'
 import { GOOGLE_MAPS_AUTH_FAILURE_EVENT, googleMapsAuthErrorMessage, googleMapsConfig, googleMapsErrorMessage, GoogleMapsSetupError, loadGoogleMaps } from '@/lib/google-maps/loader'
 import { getGoogleMapType, type MapLayerId } from '@/lib/map/providers'
-import { loadTenerifeZones } from '@/lib/map/geojson'
-import { slugifyZone } from '@/lib/map/zones'
+import { loadTenerifeZoneHierarchy, loadTenerifeZones } from '@/lib/map/geojson'
+import { canonicalizeZoneId, municipalityZoneId } from '@/lib/map/zones'
 import { TENERIFE_BOUNDS, TENERIFE_CENTER, TENERIFE_DEFAULT_ZOOM, isInsideTenerife } from '@/lib/tenerife'
 import { AdvancedClusterRenderer, createPriceMarkerContent, priceLabel, setPriceMarkerState } from '@/components/map/map-icons'
 import { MapLayerSwitcher, MapToolbar } from '@/components/map/map-toolbar'
@@ -69,7 +69,7 @@ function fitListings(map: google.maps.Map, listings: Listing[]) {
 }
 
 export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighlight, fullScreen = false, showPreview = true, onBoundsSearch, onPolygonSearch, onDrawingStart, fitResultsKey = 0, initialAction = null, onInitialActionHandled }: ResultsMapProps) {
-  const { filters, mapPolygon, setMapPolygon, clearMapPolygon, saveCurrentSearch } = useApp()
+  const { filters, mapPolygon, setMapPolygon, clearMapPolygon } = useApp()
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<google.maps.Map | null>(null)
   const clusterRef = useRef<MarkerClusterer | null>(null)
@@ -89,11 +89,13 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
   const manualMovePendingRef = useRef(false)
   const lastSearchedBoundsRef = useRef<MapBounds | null>(null)
   const previousFitResultsKeyRef = useRef(fitResultsKey)
+  const fittedPolygonSignatureRef = useRef('')
   const actionHandledRef = useRef(false)
   const geolocationPendingRef = useRef(false)
   const announcementRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const [drawing, setDrawing] = useState(false)
+  const [drawSession, setDrawSession] = useState(false)
   const [draftPolygon, setDraftPolygon] = useState<MapPolygonPoint[]>(mapPolygon)
   const [bounds, setBounds] = useState<MapBounds | null>(null)
   const [ready, setReady] = useState(false)
@@ -105,7 +107,7 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
 
   const selected = items.find((item) => item.id === selectedId)
   const itemSignature = useMemo(() => items.map((item) => `${item.id}:${item.coordinates.lat}:${item.coordinates.lng}:${getPrimaryPrice(item)}`).join('|'), [items])
-  const selectedAreaSignature = filters.areas.map(slugifyZone).sort().join('|')
+  const selectedAreaSignature = filters.areas.map(canonicalizeZoneId).sort().join('|')
   itemsRef.current = items
   selectedIdRef.current = selectedId
   highlightedIdRef.current = highlightedId
@@ -240,6 +242,7 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     const markers = itemsRef.current.map((listing) => {
       const content = createPriceMarkerContent(listing)
       setPriceMarkerState(content, listing.id === selectedIdRef.current, listing.id === highlightedIdRef.current)
+      content.dataset.markerZIndex = listing.id === selectedIdRef.current ? '3000' : '10'
       const marker = new google.maps.marker.AdvancedMarkerElement({
         position: listing.coordinates,
         content,
@@ -289,7 +292,10 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
   useEffect(() => {
     markersRef.current.forEach((marker, id) => {
       const content = markerContentRef.current.get(id)
-      if (content) setPriceMarkerState(content, id === selectedId, id === highlightedId)
+      if (content) {
+        setPriceMarkerState(content, id === selectedId, id === highlightedId)
+        content.dataset.markerZIndex = id === selectedId ? '3000' : id === highlightedId ? '2000' : '10'
+      }
       marker.zIndex = id === selectedId ? 3000 : id === highlightedId ? 2000 : 10
     })
     const map = mapRef.current
@@ -333,12 +339,17 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     let cancelled = false
     map.data.forEach((feature) => map.data.remove(feature))
     if (!selectedAreaSignature) return
-    loadTenerifeZones().then((collection) => {
+    Promise.all([loadTenerifeZones(), loadTenerifeZoneHierarchy().catch(() => null)]).then(([municipalities, hierarchy]) => {
       if (cancelled || !mapRef.current) return
       const selectedAreas = new Set(selectedAreaSignature.split('|'))
-      map.data.addGeoJson(collection as unknown as GeoJSON.GeoJsonObject)
+      const municipalityFeatures = municipalities.features.map((feature) => ({
+        ...feature,
+        id: municipalityZoneId(feature.properties.id || feature.properties.label),
+        properties: { ...feature.properties, id: municipalityZoneId(feature.properties.id || feature.properties.label) },
+      }))
+      map.data.addGeoJson({ type: 'FeatureCollection', features: [...municipalityFeatures, ...(hierarchy?.features ?? [])] } as unknown as GeoJSON.GeoJsonObject)
       map.data.setStyle((feature) => {
-        const selectedArea = selectedAreas.has(slugifyZone(String(feature.getProperty('id') ?? '')))
+        const selectedArea = selectedAreas.has(canonicalizeZoneId(String(feature.getProperty('id') ?? '')))
         return {
           visible: selectedArea,
           fillColor: '#c51a84',
@@ -391,15 +402,30 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     }
   }, [draftPolygon, drawing, ready])
 
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready || mapPolygon.length < 3) return
+    const signature = mapPolygon.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(';')
+    if (fittedPolygonSignatureRef.current === signature) return
+    fittedPolygonSignatureRef.current = signature
+    const polygonBounds = new google.maps.LatLngBounds()
+    mapPolygon.forEach((point) => polygonBounds.extend(point))
+    programmaticMoveRef.current = true
+    setBoundsDirty(false)
+    map.fitBounds(polygonBounds, { top: 72, right: 32, bottom: 96, left: 32 })
+    google.maps.event.addListenerOnce(map, 'idle', () => { programmaticMoveRef.current = false })
+  }, [mapPolygon, ready])
+
   const startDrawing = () => {
     if (onDrawingStart?.() === false) return
     onSelectRef.current('')
     setFocusSheetOnOpen(false)
     setDraftPolygon([])
+    setDrawSession(true)
     setDrawing(true)
     setActionAnnouncement('Modo dibujo activado. La zona dibujada sustituye a las zonas municipales. A\u00f1ade al menos 3 puntos.')
   }
-  const cancelDrawing = () => { setDraftPolygon(mapPolygon); setDrawing(false) }
+  const cancelDrawing = () => { setDraftPolygon(mapPolygon); setDrawing(false); setDrawSession(false) }
   const addKeyboardPoint = () => {
     const map = mapRef.current
     const center = map?.getCenter()
@@ -420,6 +446,7 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     setDraftPolygon([])
     clearMapPolygon()
     onPolygonSearch?.([])
+    setDrawSession(false)
     setActionAnnouncement('Zona dibujada eliminada.')
   }
   const locateCurrentPosition = () => {
@@ -466,10 +493,10 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialAction, onInitialActionHandled, ready])
 
-  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', selected && 'has-selection', drawing && 'is-drawing', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-provider="google-maps">
+  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', selected && 'has-selection', drawing && 'is-drawing', drawSession && 'is-draw-session', mapPolygon.length >= 3 && 'has-polygon', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-provider="google-maps">
     <div className="results-map__canvas google-map-canvas" ref={containerRef} role="application" aria-label="Google Maps con precios de habitaciones" />
     <MapLayerSwitcher value={layer} onChange={setLayer} />
-    {fullScreen ? <MapToolbar boundsDirty={boundsDirty} canSearchBounds={Boolean(boundsDirty && bounds && onBoundsSearch)} drawing={drawing} pointCount={draftPolygon.length} hasPolygon={mapPolygon.length >= 3} onSearchBounds={searchBounds} onLocate={locateCurrentPosition} onStartDrawing={startDrawing} onAddPoint={addKeyboardPoint} onCancelDrawing={cancelDrawing} onFinishDrawing={finishDrawing} onSavePolygon={() => { saveCurrentSearch(); toast.success('Zona a\u00f1adida a la b\u00fasqueda guardada') }} onDeletePolygon={deletePolygon} /> : null}
+    {fullScreen ? <MapToolbar boundsDirty={boundsDirty} canSearchBounds={Boolean(boundsDirty && bounds && onBoundsSearch)} drawing={drawing} pointCount={draftPolygon.length} hasPolygon={mapPolygon.length >= 3} onSearchBounds={searchBounds} onLocate={locateCurrentPosition} onStartDrawing={startDrawing} onAddPoint={addKeyboardPoint} onCancelDrawing={cancelDrawing} onFinishDrawing={finishDrawing} onDeletePolygon={deletePolygon} /> : null}
     {actionAnnouncement ? <div ref={announcementRef} className="map-action-announcement" role="status" aria-live="polite" tabIndex={-1}>{actionAnnouncement}</div> : null}
     {!ready && !mapError ? <div className="map-loading" role="status" aria-live="polite"><span aria-hidden="true" /><strong>Cargando Google Maps</strong></div> : null}
     {googleMapsConfig.usesDevelopmentMapId ? <p className="map-dev-notice">Mapa de desarrollo: configura un Map ID propio antes de publicar.</p> : null}

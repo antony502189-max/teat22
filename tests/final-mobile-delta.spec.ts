@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console'
 
 const mobile = { width: 390, height: 844 }
 
@@ -15,12 +16,12 @@ test('DELTA-GEO-01 rejects external locations and keeps valid Tenerife catalog/h
   await page.setViewportSize({ width: 1024, height: 768 })
   const input = page.getByPlaceholder('Municipio, barrio o zona de Tenerife').first()
   await input.fill('Madrid')
-  await page.getByRole('button', { name: 'Buscar', exact: true }).click()
+  await page.getByRole('button', { name: 'Encontrar habitación', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('En esta versión solo puedes buscar habitaciones en Tenerife.')
   await expect(page).toHaveURL(/#\/$/)
 
   await input.fill('santa cruz')
-  await page.getByRole('button', { name: 'Buscar', exact: true }).click()
+  await page.getByRole('button', { name: 'Encontrar habitación', exact: true }).click()
   await expect(page).toHaveURL(/q=Santa\+Cruz\+de\+Tenerife/)
   await expect(page.getByRole('heading', { name: /habitaciones en Santa Cruz de Tenerife/i })).toBeVisible()
 
@@ -56,8 +57,10 @@ test('DELTA-HOME-01 Para quién remains visible in both rental modes without hei
   await expect(page.getByRole('combobox', { name: 'Para quién' })).toBeVisible()
   const holidayHeight = (await panel.boundingBox())?.height
   expect(Math.abs((holidayHeight ?? 0) - (longHeight ?? 0))).toBeLessThanOrEqual(2)
-  const locationRow = page.getByRole('button', { name: /Abrir selección de ubicación/i }).first()
+  const locationRow = page.locator('.search-location-row').first()
+  const locationTrigger = page.getByRole('button', { name: /Abrir selección de ubicación/i }).first()
   expect((await locationRow.boundingBox())?.width).toBeGreaterThan(300)
+  expect((await locationTrigger.boundingBox())?.width).toBeGreaterThanOrEqual(44)
 })
 
 test('DELTA-MAP-01 draw action runs once in dedicated map and consumes its parameter', async ({ page }) => {
@@ -208,7 +211,9 @@ test('DELTA-DIAGNOSTICS-01 critical routes emit no application errors or failed 
   const consoleErrors: string[] = []
   const pageErrors: string[] = []
   const failedFirstParty: string[] = []
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !isExpectedHeadlessVectorFallback(message.text())) consoleErrors.push(message.text())
+  })
   page.on('pageerror', (error) => pageErrors.push(error.message))
   page.on('requestfailed', (request) => { if (request.url().startsWith('http://127.0.0.1:4173')) failedFirstParty.push(`${request.method()} ${request.url()}`) })
   await page.evaluate(() => localStorage.setItem('112233:session:v1', JSON.stringify('host-demo')))

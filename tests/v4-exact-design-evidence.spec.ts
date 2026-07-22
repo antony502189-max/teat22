@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Page, type Request } from '@playwright/test'
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console'
 
 test.skip(process.env.V4_EVIDENCE !== '1', 'Run explicitly with V4_EVIDENCE=1')
 
@@ -131,7 +132,7 @@ async function scrollFilter(page: Page, ratio: number) {
 }
 
 async function selectMapListing(page: Page) {
-  for (let attempt = 0; attempt < 5 && await page.locator('.price-marker-shell').count() === 0; attempt += 1) {
+  for (let attempt = 0; attempt < 5 && await page.locator('.price-marker-shell:visible').count() === 0; attempt += 1) {
     const cluster = page.locator('.room-cluster-shell').first()
     if (await cluster.count()) await cluster.click({ timeout: 15_000 })
     await page.waitForTimeout(300)
@@ -144,7 +145,9 @@ async function selectMapListing(page: Page) {
 test('capture V4 golden-indexed live evidence', async ({ page }) => {
   test.setTimeout(600_000)
   await Promise.all([mkdir(output, { recursive: true }), mkdir(geometryOutput, { recursive: true })])
-  page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(message.text()) })
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !isExpectedHeadlessVectorFallback(message.text())) diagnostics.consoleErrors.push(message.text())
+  })
   page.on('pageerror', (error) => diagnostics.pageErrors.push(error.message))
   page.on('requestfailed', (request: Request) => diagnostics.failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? 'failed'}`))
   await page.setViewportSize({ width: 390, height: 844 })

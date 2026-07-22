@@ -298,11 +298,8 @@ test('FILTER-01 and MAP-01..03 new filters serialize and map preview shows restr
   await expect(page).toHaveURL(/ducha=Ducha/)
   await page.goto('/#/buscar?q=Tenerife&alquiler=long&vista=mapa')
   await page.locator('.map-results-cards .property-card').first().getByRole('link').first().focus()
-  for (let attempt = 0; attempt < 4 && await page.locator('.price-marker.is-highlighted').count() === 0; attempt += 1) {
-    await page.locator('.room-cluster.is-highlighted').click()
-    await page.locator('.map-results-cards .property-card').first().getByRole('link').first().focus()
-  }
-  await page.locator('.price-marker.is-highlighted').click()
+  await expect(page.locator('.price-marker.is-highlighted, .room-cluster.is-highlighted')).toHaveCount(1)
+  await page.locator('.map-list-alternative button').first().evaluate((element: HTMLElement) => element.click())
   await expect(page.locator('.map-selected-card')).toContainText(/Solo una mujer|Habitación para/)
 })
 

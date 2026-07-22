@@ -48,8 +48,8 @@ async function mediaExists(page: Page, reference: string) {
 test.beforeEach(async ({ page }) => clearLocalState(page))
 
 test('USR-03..05 history, discarded listings and guest data stay in separate scopes', async ({ page }) => {
-  await page.getByLabel('Ciudad, barrio o zona').fill('Arona')
-  await page.getByRole('button', { name: 'Buscar' }).click()
+  await page.getByPlaceholder('Municipio, barrio o zona de Tenerife').fill('Arona')
+  await page.getByRole('button', { name: 'Encontrar habitación' }).click()
   await expect(page).toHaveURL(/q=Arona/)
   const guestCard = page.locator('.results-list .property-card').first()
   await expect(guestCard).toContainText('Arona')
@@ -269,12 +269,12 @@ test('MAP-04 visible-area state activates after movement and resets after search
   await page.goto('/#/buscar?q=Tenerife&alquiler=long&vista=mapa')
   await page.locator('.google-map-canvas').waitFor({ state: 'visible' })
   const searchArea = page.getByRole('button', { name: 'Buscar en esta zona' })
-  await expect(searchArea).not.toHaveAttribute('data-dirty')
+  await expect(searchArea).toHaveCount(0)
   await page.locator('.google-map-canvas').hover()
   await page.mouse.wheel(0, -600)
   await expect(searchArea).toHaveAttribute('data-dirty', 'true')
   await searchArea.click()
-  await expect(searchArea).not.toHaveAttribute('data-dirty')
+  await expect(searchArea).toHaveCount(0)
 })
 
 test('MAP-05 Google Maps loader errors expose the accessible map fallback', async ({ page }) => {

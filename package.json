@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "data:zones": "node scripts/fetch-tenerife-zone-hierarchy.mjs",
     "typecheck": "tsc -b --pretty false",
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:a11y": "playwright test tests/a11y.spec.ts",
-    "test:visual": "playwright test tests/visual-parity.spec.ts"
+    "test:visual": "playwright test tests/visual-parity.spec.ts tests/true-target-parity.spec.ts && python scripts/build-true-target-parity.py"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
