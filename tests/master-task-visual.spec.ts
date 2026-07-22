@@ -12,8 +12,8 @@ async function open(page: Page, route: string, width: number, height: number) {
   await settle(page)
   if (route.includes('vista=mapa')) {
     await expect(page.locator('.google-map-canvas')).toBeVisible()
-    await expect.poll(() => page.locator('.gm-style img[role="presentation"]').count()).toBeGreaterThan(0)
-    await expect.poll(() => page.locator('.price-marker-shell, .room-cluster-shell').count()).toBeGreaterThan(0)
+    await expect(page.locator('.google-map-canvas')).toHaveAttribute('data-map-instance', 'google-ready', { timeout: 20_000 })
+    await expect.poll(() => page.locator('.price-marker-shell, .room-cluster-shell').count(), { timeout: 20_000 }).toBeGreaterThan(0)
     await page.waitForTimeout(500)
   }
 }
@@ -70,6 +70,27 @@ test('master mobile list and map states', async ({ page }) => {
 
   await open(page, '/#/buscar?q=Tenerife&vista=mapa', 390, 844)
   await expect(page.locator('.google-map-canvas')).toBeVisible()
+  await expect(page.locator('.mobile-map-screen__contextbar')).toBeVisible()
+  await expect(page.locator('.mobile-map-screen__contextbar')).toContainText('Filtros')
+  await expect(page.locator('.mobile-map-screen__contextbar')).toContainText('Lista')
+  const mobileMapGeometry = await page.evaluate(() => {
+    const box = (selector: string) => {
+      const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect()
+      return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height }
+    }
+    const header = box('.mobile-map-screen__header')
+    const context = box('.mobile-map-screen__contextbar')
+    const canvas = box('.mobile-map-screen__canvas')
+    const footer = box('.mobile-map-screen__footer')
+    return { header, context, canvas, footer, documentWidth: document.documentElement.scrollWidth, viewportWidth: document.documentElement.clientWidth }
+  })
+  expect(mobileMapGeometry.header.bottom).toBeCloseTo(mobileMapGeometry.context.top, 0)
+  expect(mobileMapGeometry.context.bottom).toBeCloseTo(mobileMapGeometry.canvas.top, 0)
+  expect(mobileMapGeometry.canvas.bottom).toBeCloseTo(mobileMapGeometry.footer.top, 0)
+  expect(mobileMapGeometry.canvas.height).toBeGreaterThan(560)
+  expect(mobileMapGeometry.documentWidth).toBeLessThanOrEqual(mobileMapGeometry.viewportWidth + 1)
+  await expect(page.locator('.map-layer-switcher__mobile-toggle')).toBeVisible()
+  await expect(page.locator('.map-layer-switcher__options')).toBeHidden()
   await shot(page, 'master-results-map-390x844')
 
   await open(page, '/#/buscar?q=Adeje&vista=mapa', 390, 844)
@@ -79,10 +100,25 @@ test('master mobile list and map states', async ({ page }) => {
   }))).toBe(true)
   await clickFirstInViewport(page, '.price-marker-shell')
   await expect(page.locator('.map-selected-card')).toBeVisible()
+  const selectedGeometry = await page.locator('.map-selected-card').evaluate((node) => {
+    const box = node.getBoundingClientRect()
+    const canvas = document.querySelector<HTMLElement>('.mobile-map-screen__canvas')!.getBoundingClientRect()
+    return { top: box.top, right: box.right, bottom: box.bottom, left: box.left, width: box.width, canvasBottom: canvas.bottom }
+  })
+  expect(selectedGeometry.left).toBeGreaterThanOrEqual(8)
+  expect(selectedGeometry.right).toBeLessThanOrEqual(382)
+  expect(selectedGeometry.bottom).toBeLessThanOrEqual(selectedGeometry.canvasBottom)
+  expect(selectedGeometry.width).toBeGreaterThan(360)
   await shot(page, 'master-results-map-selected-390x844', [page.locator('.map-selected-card img')])
 
   await open(page, '/#/buscar?q=Tenerife&vista=mapa&dibujar=1', 390, 844)
   await expect(page.locator('.google-map-shell')).toHaveAttribute('data-drawing', 'true')
+  await expect(page.getByRole('status')).toContainText('Modo dibujo activado')
+  const drawingMessage = await page.getByRole('status').boundingBox()
+  const drawingCanvas = await page.locator('.mobile-map-screen__canvas').boundingBox()
+  expect(drawingMessage).not.toBeNull()
+  expect(drawingCanvas).not.toBeNull()
+  expect(drawingMessage!.y).toBeLessThan(drawingCanvas!.y + 24)
   await shot(page, 'master-results-map-drawing-390x844')
 })
 
@@ -100,6 +136,14 @@ test('master municipality selection and desktop split states', async ({ page }) 
 
   await open(page, '/#/buscar?q=Tenerife&vista=mapa', 1440, 900)
   await expect(page.locator('.map-results-split')).toBeVisible()
+  await expect(page.locator('.idealista-results-layout.is-map-view > .filter-sidebar')).toBeHidden()
+  const desktopSplit = await page.locator('.map-results-split').evaluate((node) => {
+    const list = node.querySelector<HTMLElement>('.map-results-cards')!.getBoundingClientRect()
+    const map = node.querySelector<HTMLElement>('.idealista-map-view')!.getBoundingClientRect()
+    return { listWidth: list.width, mapWidth: map.width, mapBottom: map.bottom, viewportHeight: window.innerHeight }
+  })
+  expect(desktopSplit.mapWidth).toBeGreaterThan(desktopSplit.listWidth)
+  expect(desktopSplit.mapBottom).toBeLessThanOrEqual(desktopSplit.viewportHeight + 2)
   await page.locator('.map-results-cards .property-card').first().getByRole('link').first().focus()
   await shot(page, 'master-results-split-1440x900', [page.locator('.property-card__media img')])
 })

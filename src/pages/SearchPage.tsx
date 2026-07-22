@@ -397,6 +397,10 @@ export function SearchPage() {
         <LocationSelector selected={filters.areas} currentQuery={query} onApply={applyLocationAreas} onLocationSelect={selectLocation} />
         <Button type="button" className="mobile-save-search" onClick={saveCurrentSearch} aria-label="Guardar búsqueda"><Bell /><span>Guardar</span></Button>
       </header>
+      <div className="mobile-map-screen__contextbar" aria-label="Acciones de resultados">
+        <FilterButton resultCount={items.length} onFiltersChange={commitFilters} onRentalModeChange={(mode) => updateParams((next) => next.set("alquiler", mode))} />
+        <Button type="button" variant="ghost" onClick={() => changeView('list')}><List data-icon="inline-start" />Lista</Button>
+      </div>
       <div className="mobile-map-screen__canvas">
         <MapView
           items={items}

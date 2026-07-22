@@ -29,11 +29,15 @@ export function SelectedListingSheet({ listing, onClose, focusOnOpen = false, re
   }, [onClose, returnFocus])
 
   return <article ref={sheetRef} className="selected-listing-sheet map-selected-card" aria-label={`Habitación seleccionada en ${listing.area}`} tabIndex={-1}>
-    <div className="selected-listing-sheet__media"><MediaImage src={listing.images[0]} alt={`Habitación en ${listing.area}`} width="288" height="216" /></div>
+    <div className="selected-listing-sheet__media">
+      <MediaImage src={listing.images[0]} alt={`Habitación en ${listing.area}`} width="576" height="360" />
+      <span className="selected-listing-sheet__photo-count">1/{listing.images.length}</span>
+    </div>
     <div className="selected-listing-sheet__content">
-      <p>{listing.area}, {listing.city}</p>
-      <strong>{priceLabel(listing)} <span>/{getPrimaryCadence(listing)}</span></strong>
       <Link to={`/habitacion/${listing.id}`}>{listing.title}</Link>
+      <strong>{priceLabel(listing)} <span>/{getPrimaryCadence(listing)}</span></strong>
+      <p>{listing.area}, {listing.city}</p>
+      <p className="selected-listing-sheet__facts">{listing.roomType} · {listing.currentResidents} residentes · {listing.roomSizeM2} m²</p>
       <ul>{getCriticalRestrictions(listing).slice(0, 2).map((restriction) => <li key={restriction}>{restriction}</li>)}</ul>
     </div>
     <div className="selected-listing-sheet__actions">

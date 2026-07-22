@@ -1,9 +1,10 @@
 import { List, Map } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { cn } from '@/lib/utils'
 
 export function ListMapSwitcher({ value, count, onChange, className = '' }: { value: 'list' | 'map'; count: number; onChange: (value: 'list' | 'map') => void; className?: string }) {
-  return <div className={`list-map-switcher ${className}`} role="group" aria-label="Vista de resultados">
-    <Button type="button" variant={value === 'list' ? 'default' : 'ghost'} aria-pressed={value === 'list'} onClick={() => onChange('list')}><List data-icon="inline-start" />Lista <span>{count}</span></Button>
-    <Button type="button" variant={value === 'map' ? 'default' : 'ghost'} aria-pressed={value === 'map'} onClick={() => onChange('map')}><Map data-icon="inline-start" />Mapa</Button>
-  </div>
+  return <ToggleGroup type="single" value={value} onValueChange={(next) => { if (next === 'list' || next === 'map') onChange(next) }} variant="outline" spacing={0} className={cn('list-map-switcher', className)} aria-label="Vista de resultados">
+    <ToggleGroupItem value="list" aria-label={`Mostrar lista de ${count} habitaciones`}><List data-icon="inline-start" />Lista <span>{count}</span></ToggleGroupItem>
+    <ToggleGroupItem value="map" aria-label="Mostrar habitaciones en el mapa"><Map data-icon="inline-start" />Mapa</ToggleGroupItem>
+  </ToggleGroup>
 }

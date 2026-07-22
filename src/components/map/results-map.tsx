@@ -54,12 +54,17 @@ function fitListings(map: google.maps.Map, listings: Listing[]) {
   if (!listings.length) return
   const bounds = new google.maps.LatLngBounds()
   listings.forEach((listing) => bounds.extend(listing.coordinates))
-  map.fitBounds(bounds, 54)
+  const isCompact = map.getDiv().clientWidth < 768
+  map.fitBounds(bounds, isCompact
+    ? { top: 96, right: 42, bottom: 118, left: 42 }
+    : { top: 72, right: 72, bottom: 72, left: 72 })
   // Google may animate fitBounds differently while a split pane is settling.
   // Pinning the computed center keeps desktop and mobile geometry deterministic.
   map.setCenter(bounds.getCenter())
   google.maps.event.addListenerOnce(map, 'idle', () => {
-    if ((map.getZoom() ?? 0) > 13) map.setZoom(13)
+    const zoom = map.getZoom() ?? 0
+    if (zoom > 13) map.setZoom(13)
+    else if (isCompact && zoom < 9.65) map.setZoom(9.65)
   })
 }
 
@@ -147,7 +152,10 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         gestureHandling: 'greedy',
         restriction: {
           latLngBounds: TENERIFE_BOUNDS,
-          strictBounds: true,
+          // A hard restriction forces a tall mobile viewport to zoom into only
+          // half of Tenerife. Keep the island as a soft pan boundary so the
+          // initial fit can show the complete result set like a property map.
+          strictBounds: false,
         },
       })
       mapRef.current = map
@@ -237,6 +245,7 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         content,
         title: `${listing.area}, ${priceLabel(listing)}`,
         gmpClickable: true,
+        collisionBehavior: google.maps.CollisionBehavior.OPTIONAL_AND_HIDES_LOWER_PRIORITY,
         zIndex: listing.id === selectedIdRef.current ? 3000 : 10,
       })
       const select = (original: Event) => {
@@ -245,10 +254,6 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         onSelectRef.current(listing.id)
       }
       marker.addEventListener('gmp-click', select)
-      content.addEventListener('click', (event) => {
-        event.stopPropagation()
-        select(event)
-      })
       content.addEventListener('mouseenter', () => onHighlightRef.current?.(listing.id))
       content.addEventListener('mouseleave', () => onHighlightRef.current?.(''))
       content.addEventListener('focus', () => onHighlightRef.current?.(listing.id))
@@ -457,12 +462,11 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     if (initialAction === 'draw') startDrawing()
     else locateCurrentPosition()
     onInitialActionHandled?.()
-    requestAnimationFrame(() => announcementRef.current?.focus())
   // The action token and readiness intentionally control this one-shot effect.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialAction, onInitialActionHandled, ready])
 
-  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-provider="google-maps">
+  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', selected && 'has-selection', drawing && 'is-drawing', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-provider="google-maps">
     <div className="results-map__canvas google-map-canvas" ref={containerRef} role="application" aria-label="Google Maps con precios de habitaciones" />
     <MapLayerSwitcher value={layer} onChange={setLayer} />
     {fullScreen ? <MapToolbar boundsDirty={boundsDirty} canSearchBounds={Boolean(boundsDirty && bounds && onBoundsSearch)} drawing={drawing} pointCount={draftPolygon.length} hasPolygon={mapPolygon.length >= 3} onSearchBounds={searchBounds} onLocate={locateCurrentPosition} onStartDrawing={startDrawing} onAddPoint={addKeyboardPoint} onCancelDrawing={cancelDrawing} onFinishDrawing={finishDrawing} onSavePolygon={() => { saveCurrentSearch(); toast.success('Zona a\u00f1adida a la b\u00fasqueda guardada') }} onDeletePolygon={deletePolygon} /> : null}
