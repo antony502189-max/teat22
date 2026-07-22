@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console';
 
 const runtimeErrors = new WeakMap<Page, string[]>();
 
@@ -45,6 +46,7 @@ test.beforeEach(async ({ page }) => {
   runtimeErrors.set(page, errors);
   page.on("console", (message) => {
     if (message.type() !== "error") return;
+    if (isExpectedHeadlessVectorFallback(message.text())) return;
     const url = message.location().url;
     const externalMediaFailure = message.text().startsWith("Failed to load resource:")
       && ["images.unsplash.com", "maps.googleapis.com", "maps.gstatic.com"].some((host) => url.includes(host));
@@ -63,18 +65,15 @@ test.afterEach(async ({ page }) =>
 test("01–03 rental mode, búsqueda por fecha y selección de varias zonas", async ({
   page,
 }) => {
-  await page.getByRole("radio", { name: "Alquiler vacacional" }).click();
-  await page.getByLabel("Ciudad, barrio o zona").fill("Tenerife");
-  await page.getByLabel("Entrada").fill("2026-08-10");
+  await page.getByRole("radio", { name: "Turismo, corta estancia" }).click();
+  await page.getByPlaceholder("Municipio, barrio o zona de Tenerife").fill("Tenerife");
   await page.getByRole("button", { name: /abrir selección de ubicación/i }).click();
-  for (const area of ["El Médano", "Playa de las Américas"])
-    await page
-      .locator(".location-selector-option")
-      .filter({ hasText: area })
-      .getByRole("checkbox")
-      .click();
-  await page.getByRole("button", { name: /aplicar 2 zonas/i }).click();
-  await page.getByRole("button", { name: /^buscar$/i }).click();
+  await page.getByRole('button', { name: 'Seleccionar zonas en el mapa' }).click();
+  for (const area of ["Granadilla de Abona", "Arona"])
+    await page.getByRole('button', { name: new RegExp(`^${area}\\b`) }).click();
+  await page.getByRole("button", { name: /ver \d+ habitaciones/i }).click();
+  await page.getByRole("button", { name: /encontrar habitación/i }).click();
+  await page.getByLabel("Disponible para esta fecha").fill("2026-08-10");
   await expect(page).toHaveURL(/alquiler=holiday/);
   await expect(page).toHaveURL(/zonas=/);
   await expect(page).toHaveURL(/fecha=2026-08-10/);
@@ -266,7 +265,7 @@ test("10–13 map marker/card sync, marker preview, bounds and polygon filtering
   await clickFirstMapFeatureInViewport(page, '.price-marker-shell');
   await expect(page.locator(".price-marker.is-selected")).toHaveCount(1);
   await expect(page.locator(".map-selected-card")).toBeVisible();
-  await expect(page.locator(".map-selected-card a")).toHaveAttribute(
+  await expect(page.locator('.map-selected-card a[href*="/habitacion/"]').first()).toHaveAttribute(
     "href",
     /habitacion/,
   );
@@ -523,7 +522,7 @@ test("28–29 mobile navigation and keyboard-only critical path", async ({
   await search.fill("Los Cristianos");
   await page.getByRole("button", { name: /Los Cristianos/i }).focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: /^buscar$/i }).focus();
+  await page.getByRole("button", { name: /encontrar habitación/i }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/buscar/);
   await expect(page.locator(".bottom-nav")).toBeVisible();

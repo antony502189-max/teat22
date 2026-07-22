@@ -22,3 +22,27 @@ Run `node scripts/fetch-tenerife-municipalities.mjs` to rebuild the file. The sc
 5. normalizes five labels to the current names already used by the application.
 
 No district or neighbourhood polygons are included because this source only provides municipalities. Existing neighbourhood names remain available as text filters and listing metadata.
+
+## District and neighbourhood hierarchy
+
+`tenerife-zone-hierarchy.geojson` adds real, source-backed child zones for the two
+key urban municipalities requested for the search experience:
+
+- **San Cristóbal de La Laguna:** 6 statistical district polygons from
+  [ISTAC, Distritos de Canarias a 01/01/2024](https://datos.canarias.es/catalogos/estadisticas/dataset/distritos-de-canarias-a-01-01-2024),
+  generalized GeoJSON in WGS84. Retrieved 2026-07-22. The
+  [ISTAC reuse terms](https://www.gobiernodecanarias.org/istac/aviso_legal.html)
+  permit commercial and non-commercial reuse and require the attribution
+  `Fuente: Instituto Canario de Estadística (ISTAC)` plus the update date.
+- **Santa Cruz de Tenerife:** 5 named district polygons from the municipal
+  [Distritos GeoJSON](https://datos.gob.es/es/catalogo/l01380380-distritos1/resource/0320174e-8d5e-4bd2-95b4-c7b58bbc7599)
+  and 80 neighbourhood polygons from
+  [Barrios. Población año 2016](https://datos.gob.es/es/catalogo/l01380380-barrios-poblacion-ano-20161),
+  both published by Ayuntamiento de Santa Cruz de Tenerife under CC BY.
+
+Run `npm run data:zones` to download and rebuild the hierarchy. The transform
+filters the ISTAC collection to La Laguna, removes demographic attributes from
+the Santa Cruz neighbourhood layer, adds canonical stable IDs, parent IDs,
+aliases, geometry-availability flags, and source metadata. Coordinates are not
+invented or manually redrawn. These layers are search aids and are not presented
+as cadastral or legally binding boundaries.

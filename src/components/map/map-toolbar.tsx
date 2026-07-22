@@ -1,4 +1,4 @@
-import { Check, Crosshair, Heart, Layers3, MapPin, Pencil, Search, Trash2, X } from 'lucide-react'
+import { Check, Crosshair, Layers3, MapPin, Pencil, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { getAvailableTileProviders, type MapLayerId } from '@/lib/map/providers'
 import { cn } from '@/lib/utils'
@@ -36,7 +36,6 @@ interface MapToolbarProps {
   onAddPoint: () => void
   onCancelDrawing: () => void
   onFinishDrawing: () => void
-  onSavePolygon: () => void
   onDeletePolygon: () => void
 }
 
@@ -48,9 +47,9 @@ export function MapToolbar(props: MapToolbarProps) {
       <Button className="map-toolbar__drawing map-toolbar__add-point" variant="outline" onClick={props.onAddPoint}><MapPin data-icon="inline-start" />Añadir punto</Button>
       <Button className="map-toolbar__drawing map-toolbar__cancel" variant="outline" onClick={props.onCancelDrawing}><X data-icon="inline-start" />Cancelar</Button>
       <Button className="map-toolbar__drawing map-toolbar__finish" disabled={props.pointCount < 3} onClick={props.onFinishDrawing}><Check data-icon="inline-start" />Finalizar ({props.pointCount})</Button>
-    </> : props.hasPolygon ? <>
-      <Button className="map-toolbar__polygon map-toolbar__save" variant="outline" onClick={props.onSavePolygon}><Heart data-icon="inline-start" />Guardar zona</Button>
-      <Button className="map-toolbar__polygon map-toolbar__delete" variant="outline" onClick={props.onDeletePolygon}><Trash2 data-icon="inline-start" />Eliminar zona</Button>
-    </> : <Button className="map-toolbar__draw" variant="outline" onClick={props.onStartDrawing} title="La zona dibujada sustituye a las zonas municipales seleccionadas"><Pencil data-icon="inline-start" />Dibujar zona</Button>}
+    </> : props.hasPolygon ? <div className="map-toolbar__draw map-toolbar__polygon-group">
+      <Button variant="outline" onClick={props.onStartDrawing}><Pencil data-icon="inline-start" />Redibujar zona</Button>
+      <Button variant="outline" size="icon" onClick={props.onDeletePolygon} aria-label="Eliminar zona"><Trash2 /></Button>
+    </div> : <Button className="map-toolbar__draw" variant="outline" onClick={props.onStartDrawing} title="La zona dibujada sustituye a las zonas municipales seleccionadas"><Pencil data-icon="inline-start" />Dibujar zona</Button>}
   </div>
 }

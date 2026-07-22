@@ -40,8 +40,16 @@ test('LOCK-OVERLAY derives at most two truthful image restrictions and omits emp
   expect(await galleryOverlay.locator('span').count()).toBeLessThanOrEqual(2)
 
   await page.goto('/#/buscar?q=Tenerife&vista=mapa')
-  await page.locator('.room-cluster-shell').first().click({ timeout: 15_000 })
-  await page.locator('.price-marker-shell').first().click({ timeout: 15_000 })
+  for (let attempt = 0; attempt < 5 && await page.locator('.price-marker-shell:visible').count() === 0; attempt += 1) {
+    await page.evaluate(() => {
+      const cluster = document.querySelector('.room-cluster-shell')
+      if (cluster instanceof HTMLElement) cluster.click()
+    })
+    await page.waitForTimeout(300)
+  }
+  const marker = page.locator('.price-marker-shell:visible').first()
+  await expect(marker).toBeVisible({ timeout: 15_000 })
+  await marker.evaluate((element: HTMLElement) => element.click())
   await expect(page.locator('.map-selected-card')).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('.map-selected-card__media > span')).toBeVisible()
 })

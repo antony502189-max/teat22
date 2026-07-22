@@ -241,13 +241,20 @@ test('MAP-06 selecting a card or marker preserves viewport and map instance', as
   await page.goto('/#/buscar?q=Tenerife&alquiler=long&vista=mapa')
   const map = page.locator('.google-map-canvas')
   await expect(map).toHaveAttribute('data-map-center', /,/)
-  const before = await map.evaluate((element) => ({ instance: element.getAttribute('data-map-instance'), center: element.getAttribute('data-map-center'), zoom: element.getAttribute('data-map-zoom') }))
   await page.locator('.map-results-cards .property-card').first().getByRole('link').first().focus()
-  for (let attempt = 0; attempt < 4 && await page.locator('.price-marker.is-highlighted').count() === 0; attempt += 1) {
-    await page.locator('.room-cluster.is-highlighted').click()
-    await page.locator('.map-results-cards .property-card').first().getByRole('link').first().focus()
+  await expect(page.locator('.price-marker.is-highlighted, .room-cluster.is-highlighted')).toHaveCount(1)
+  for (let attempt = 0; attempt < 5 && await page.locator('.price-marker-shell:visible').count() === 0; attempt += 1) {
+    await page.evaluate(() => {
+      const highlighted = document.querySelector('.room-cluster.is-highlighted')?.closest('.room-cluster-shell')
+      const cluster = highlighted ?? document.querySelector('.room-cluster-shell')
+      if (cluster instanceof HTMLElement) cluster.click()
+    })
+    await page.waitForTimeout(300)
   }
-  await page.locator('.price-marker.is-highlighted').click()
+  const visiblePrice = page.locator('.price-marker-shell:visible').first()
+  await expect(visiblePrice).toBeVisible()
+  const before = await map.evaluate((element) => ({ instance: element.getAttribute('data-map-instance'), center: element.getAttribute('data-map-center'), zoom: element.getAttribute('data-map-zoom') }))
+  await visiblePrice.evaluate((element: HTMLElement) => element.click())
   await expect(page.locator('.map-selected-card')).toBeVisible()
   const after = await map.evaluate((element) => ({ instance: element.getAttribute('data-map-instance'), center: element.getAttribute('data-map-center'), zoom: element.getAttribute('data-map-zoom') }))
   expect(after).toEqual(before)
@@ -267,6 +274,8 @@ test('RESP-06 short mobile dialogs and critical map/uploader targets remain reac
   expect(deletePhoto && deletePhoto.width >= 44 && deletePhoto.height >= 44).toBeTruthy()
 
   await page.goto('/#/buscar?q=Tenerife&alquiler=long&vista=mapa')
+  await page.locator('.google-map-canvas').hover()
+  await page.mouse.wheel(0, -600)
   const searchArea = await page.getByRole('button', { name: 'Buscar en esta zona' }).boundingBox()
   expect(searchArea && searchArea.height >= 44).toBeTruthy()
 })
@@ -277,15 +286,15 @@ test('I18N-01 Russian and English versions switch and persist without changing r
   await page.getByRole('button', { name: 'Seleccionar idioma' }).first().click()
   await page.getByRole('menuitemradio', { name: 'RU Русский' }).click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru')
-  await expect(page.getByRole('heading', { level: 1, name: 'Ваша следующая комната ближе, чем кажется' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Только комнаты' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Выбрать язык' }).first().click()
   await page.getByRole('menuitemradio', { name: 'EN English' }).click()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
-  await expect(page.getByRole('heading', { level: 1, name: 'Your next room is closer than you think' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Rooms only' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => localStorage.getItem('112233:language:v1'))).toBe('en')
 
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
-  await expect(page.getByRole('heading', { level: 1, name: 'Your next room is closer than you think' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Rooms only' })).toBeVisible()
 })

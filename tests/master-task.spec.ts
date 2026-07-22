@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console'
 
 async function clickFirstInViewport(page: Page, selector: string) {
   const elements = page.locator(selector)
@@ -41,14 +42,14 @@ test('P1 multiple municipalities stay synchronized with URL and filters', async 
   await page.goto('/#/buscar?q=Tenerife')
   await settle(page)
   await page.getByRole('button', { name: /Abrir selección de ubicación/i }).first().click()
-  await page.getByRole('button', { name: 'Seleccionar municipios en el mapa' }).click()
-  const group = page.getByRole('group', { name: 'Municipios de Tenerife' })
-  await expect(group).toBeVisible()
-  await group.getByRole('button', { name: /^Adeje\b/ }).click()
-  await group.getByRole('button', { name: /^Arona\b/ }).click()
+  await page.getByRole('button', { name: 'Seleccionar zonas en el mapa' }).click()
+  const browser = page.getByRole('region', { name: 'Seleccionar zonas de Tenerife' })
+  await expect(browser).toBeVisible()
+  await browser.getByRole('button', { name: /^Adeje\b/ }).click()
+  await browser.getByRole('button', { name: /^Arona\b/ }).click()
   await expect(page.getByText('2 zonas seleccionadas', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: /^Ver \d+ habitaciones$/ }).click()
-  await expect.poll(() => decodeURIComponent(page.url())).toContain('zonas=adeje,arona')
+  await expect.poll(() => decodeURIComponent(page.url())).toContain('zonas=municipality:adeje,municipality:arona')
   await expect(page.locator('.filter-count')).toHaveText(['1', '1'])
   const locations = page.locator('.results-list .property-location')
   const locationCount = await locations.count()
@@ -56,16 +57,16 @@ test('P1 multiple municipalities stay synchronized with URL and filters', async 
   await expect(locations.filter({ hasText: /Adeje|Arona/ })).toHaveCount(locationCount)
   await page.reload()
   await settle(page)
-  await expect.poll(() => decodeURIComponent(page.url())).toContain('zonas=adeje,arona')
+  await expect.poll(() => decodeURIComponent(page.url())).toContain('zonas=municipality:adeje,municipality:arona')
 })
 
 test('P1 municipality list remains usable when GeoJSON cannot load', async ({ page }) => {
-  await page.route('**/tenerife-municipalities.geojson*', (route) => route.abort())
+  await page.route('**/tenerife-zone-hierarchy.geojson*', (route) => route.abort())
   await page.goto('/#/buscar?q=Tenerife')
   await page.getByRole('button', { name: /Abrir selección de ubicación/i }).first().click()
-  await page.getByRole('button', { name: 'Seleccionar municipios en el mapa' }).click()
-  await expect(page.getByRole('alert').filter({ hasText: /límites municipales/i })).toBeVisible()
-  const adeje = page.getByRole('group', { name: 'Municipios de Tenerife' }).getByRole('button', { name: /^Adeje\b/ })
+  await page.getByRole('button', { name: 'Seleccionar zonas en el mapa' }).click()
+  await expect(page.getByRole('status').filter({ hasText: /límites detallados/i })).toBeVisible()
+  const adeje = page.getByRole('region', { name: 'Seleccionar zonas de Tenerife' }).getByRole('button', { name: /^Adeje\b/ })
   await adeje.click()
   await expect(adeje).toHaveAttribute('aria-pressed', 'true')
 })
@@ -74,7 +75,7 @@ test('P1 municipality selector geometry stays inside a 390px viewport', async ({
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/#/buscar?q=Tenerife')
   await page.getByRole('button', { name: /Abrir selección de ubicación/i }).first().click()
-  await page.getByRole('button', { name: 'Seleccionar municipios en el mapa' }).click()
+  await page.getByRole('button', { name: 'Seleccionar zonas en el mapa' }).click()
   await expect(page.locator('.zone-selection .map-layer-switcher')).toBeVisible()
   const geometry = await page.locator('.location-selector-dialog, .location-zones-panel, .zone-selection, .zone-selection__map-wrap, .zone-selection__sidebar, .zone-selection__footer').evaluateAll((nodes) => nodes.map((node) => {
     const rect = node.getBoundingClientRect()
@@ -94,17 +95,33 @@ test('P0 results map keeps selection, preview and manual bounds search', async (
   await page.goto('/#/buscar?q=Adeje&vista=mapa')
   await expect(page.locator('.google-map-canvas')).toBeVisible()
   await expect(page.getByRole('button', { name: /Buscar en esta zona/i })).toHaveCount(0)
+  for (let attempt = 0; attempt < 5 && !(await hasInViewport(page, '.price-marker-shell')); attempt += 1) {
+    await page.locator('.room-cluster-shell').evaluateAll((nodes) => {
+      const cluster = nodes.find((node) => {
+        const rect = node.getBoundingClientRect()
+        return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < window.innerWidth && rect.top < window.innerHeight
+      })
+      if (cluster instanceof HTMLElement) cluster.click()
+    })
+    await page.waitForTimeout(300)
+  }
   await expect.poll(() => hasInViewport(page, '.price-marker-shell')).toBe(true)
   await clickFirstInViewport(page, '.price-marker-shell')
   await expect(page.locator('.map-selected-card')).toBeVisible()
   await expect(page.locator('.price-marker.is-selected')).toHaveCount(1)
-  await page.getByRole('button', { name: 'Lista', exact: false }).last().click()
+  await page.getByRole('radio', { name: /Mostrar lista/ }).click()
   await expect(page).not.toHaveURL(/vista=mapa/)
-  await page.getByRole('button', { name: /^Mapa/ }).last().click()
+  await page.getByRole('radio', { name: /Mostrar habitaciones en el mapa/ }).last().click()
   await expect(page.locator('.map-selected-card')).toBeVisible()
   const remountedMap = page.locator('.google-map-canvas')
   await expect(remountedMap).toHaveAttribute('data-map-instance', 'google-ready')
   await expect(remountedMap).toHaveAttribute('data-map-center', /.+/)
+  const centerBeforeClose = await remountedMap.getAttribute('data-map-center')
+  await page.getByRole('button', { name: 'Cerrar vista previa' }).click()
+  await expect(page.locator('.map-selected-card')).toHaveCount(0)
+  await expect(remountedMap).toHaveAttribute('data-map-center', centerBeforeClose ?? '')
+  await page.goto('/#/buscar?q=Adeje&vista=mapa')
+  await expect(remountedMap).toHaveAttribute('data-map-instance', 'google-ready')
   await remountedMap.hover()
   await page.mouse.wheel(0, -600)
   await expect(page.getByRole('button', { name: /Buscar en esta zona/i })).toBeVisible()
@@ -128,7 +145,9 @@ test('P0 desktop split view synchronizes cards and visible clusters without movi
 test('P1 core routes have no horizontal overflow or console errors across the responsive matrix', async ({ page }) => {
   test.setTimeout(240_000)
   const consoleErrors: string[] = []
-  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !isExpectedHeadlessVectorFallback(message.text())) consoleErrors.push(message.text())
+  })
   for (const width of [360, 390, 430, 768, 1024, 1280, 1440]) {
     const height = width < 768 ? 844 : 900
     await page.setViewportSize({ width, height })

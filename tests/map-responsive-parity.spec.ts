@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
+import { isExpectedHeadlessVectorFallback } from './helpers/google-maps-console'
 
 const matrix = [
   { width: 375, height: 812, mode: 'mobile' },
@@ -24,7 +25,7 @@ test('results map keeps Idealista-style geometry across the responsive matrix', 
   const unexpectedConsoleErrors: string[] = []
   page.on('console', (message) => {
     if (message.type() !== 'error') return
-    if (message.text().includes('Attempted to load a Vector Map')) return
+    if (isExpectedHeadlessVectorFallback(message.text())) return
     unexpectedConsoleErrors.push(message.text())
   })
 

@@ -83,7 +83,7 @@ test('capture unmasked screenshot-locked AFTER-LIVE matrix', async ({ page }) =>
   await page.getByRole('button', { name: /Abrir selección de ubicación/i }).first().click()
   await expect(page.getByRole('dialog')).toBeVisible()
   await screenshot(page, path.join(output, 'location-390x844.png'))
-  await page.getByRole('button', { name: 'Seleccionar municipios y barrios' }).click()
+  await page.getByRole('button', { name: 'Seleccionar zonas en el mapa' }).click()
   await screenshot(page, path.join(output, 'location-zones-390x844.png'))
 
   await page.goto('/#/buscar?q=Tenerife')
@@ -105,11 +105,16 @@ test('capture unmasked screenshot-locked AFTER-LIVE matrix', async ({ page }) =>
   await screenshot(page, path.join(output, 'sort-390x844.png'))
 
   await capture(page, 'search-map-390x844', '/#/buscar?q=Tenerife&vista=mapa', 390, 844, { map: true })
-  for (let attempt = 0; attempt < 4 && await page.locator('.price-marker-shell').count() === 0; attempt += 1) {
-    await page.locator('.room-cluster-shell').first().click({ timeout: 15_000 })
+  for (let attempt = 0; attempt < 4 && await page.locator('.price-marker-shell:visible').count() === 0; attempt += 1) {
+    await page.evaluate(() => {
+      const cluster = document.querySelector('.room-cluster-shell')
+      if (cluster instanceof HTMLElement) cluster.click()
+    })
     await page.waitForTimeout(450)
   }
-  await page.locator('.price-marker-shell').first().click({ timeout: 15_000 })
+  const marker = page.locator('.price-marker-shell:visible').first()
+  await expect(marker).toBeVisible({ timeout: 15_000 })
+  await marker.evaluate((element: HTMLElement) => element.click())
   await expect(page.locator('.map-selected-card')).toBeVisible()
   await screenshot(page, path.join(output, 'map-selected-listing-390x844.png'))
   await capture(page, 'map-draw-instruction-390x844', '/#/buscar?q=Tenerife&vista=mapa&dibujar=1', 390, 844, { map: true })

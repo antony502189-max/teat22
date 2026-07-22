@@ -18,7 +18,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useApp } from "@/contexts/app-context";
 import { defaultFilters } from "@/data/listings";
 import { tenantRequirementLabels } from "@/lib/listings";
-import { getMunicipalityLabel } from "@/lib/map/zones";
+import { loadTenerifeZoneHierarchy } from "@/lib/map/geojson";
+import { getMunicipalityLabel, getRootMunicipalityId, getZoneLabel, isDetailedZoneId, type TenerifeZoneCollection } from "@/lib/map/zones";
 import { listingMatchesTenerifeLocation, resolveTenerifeLocation } from "@/lib/tenerife";
 import { ListMapSwitcher } from "@/components/map/list-map-switcher";
 import {
@@ -76,6 +77,7 @@ export function SearchPage() {
   const [highlighted, setHighlighted] = useState("");
   const [loading, setLoading] = useState(false);
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  const [zoneHierarchy, setZoneHierarchy] = useState<TenerifeZoneCollection | null>(null);
   const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_MAP_MEDIA).matches);
   const [initialMapAction, setInitialMapAction] = useState<'draw' | 'near' | null>(() => params.get('dibujar') === '1' ? 'draw' : params.get('cerca') === '1' ? 'near' : null);
   const actionConsumedRef = useRef(false);
@@ -129,6 +131,17 @@ export function SearchPage() {
   }, []);
 
   useEffect(() => {
+    if (!filters.areas.some(isDetailedZoneId)) return;
+    let cancelled = false;
+    loadTenerifeZoneHierarchy().then((next) => {
+      if (!cancelled) setZoneHierarchy(next);
+    }).catch(() => {
+      if (!cancelled) setZoneHierarchy(null);
+    });
+    return () => { cancelled = true; };
+  }, [filters.areas]);
+
+  useEffect(() => {
     const requestedAction = params.get('dibujar') === '1' ? 'draw' : params.get('cerca') === '1' ? 'near' : null;
     if (!requestedAction) return;
     actionConsumedRef.current = false;
@@ -150,8 +163,9 @@ export function SearchPage() {
         allListings.filter((listing) => !discarded.has(listing.id)),
         rentalMode,
         filters,
+        zoneHierarchy,
       ).filter((listing) => !invalidLocation && listingMatchesTenerifeLocation(listing, location)),
-    [allListings, discarded, filters, invalidLocation, location, rentalMode],
+    [allListings, discarded, filters, invalidLocation, location, rentalMode, zoneHierarchy],
   );
   const spatialItems = useMemo(
     () =>
@@ -239,7 +253,8 @@ export function SearchPage() {
   };
   const applyLocationAreas = (selectedAreas: string[]) => {
     const nextFilters = { ...filters, areas: selectedAreas };
-    const nextQuery = selectedAreas.length === 1 ? getMunicipalityLabel(selectedAreas[0]) ?? selectedAreas[0] : 'Tenerife';
+    const rootId = selectedAreas.length === 1 ? getRootMunicipalityId(selectedAreas[0], zoneHierarchy) : undefined;
+    const nextQuery = rootId ? getMunicipalityLabel(rootId) ?? 'Tenerife' : 'Tenerife';
     setQuery(nextQuery);
     setFilters(nextFilters);
     const next = filtersToParams(nextFilters, new URLSearchParams(params));
@@ -294,7 +309,7 @@ export function SearchPage() {
         key: "areas",
         label:
           filters.areas.length === 1
-            ? filters.areas[0]
+            ? getZoneLabel(filters.areas[0], zoneHierarchy)
             : `${filters.areas.length} zonas`,
         clear: () => setOne("areas", []),
       });
@@ -388,13 +403,13 @@ export function SearchPage() {
     return chips;
     // setOne only closes over the latest filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, mapBounds, mapPolygon]);
+  }, [filters, mapBounds, mapPolygon, zoneHierarchy]);
 
   if (view === 'map' && isMobile) {
     return <div className="mobile-map-screen" aria-label="Mapa de habitaciones en Tenerife">
       <header className="mobile-map-screen__header">
         <Button type="button" variant="ghost" size="icon" onClick={() => changeView('list')} aria-label="Volver a la lista"><ArrowLeft /></Button>
-        <LocationSelector selected={filters.areas} currentQuery={query} onApply={applyLocationAreas} onLocationSelect={selectLocation} />
+        <LocationSelector selected={filters.areas} currentQuery={`${items.length} habitaciones, ${query}`} onApply={applyLocationAreas} onLocationSelect={selectLocation} />
         <Button type="button" className="mobile-save-search" onClick={saveCurrentSearch} aria-label="Guardar búsqueda"><Bell /><span>Guardar</span></Button>
       </header>
       <div className="mobile-map-screen__contextbar" aria-label="Acciones de resultados">

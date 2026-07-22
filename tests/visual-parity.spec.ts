@@ -10,6 +10,11 @@ async function open(page: Page, route: string, width = 390, height = 844) {
   await page.setViewportSize({ width, height })
   await page.goto(route)
   await settle(page)
+  if (route.includes('vista=mapa')) {
+    await expect(page.locator('.google-map-canvas')).toHaveAttribute('data-map-instance', 'google-ready', { timeout: 20_000 })
+    await expect.poll(() => page.locator('.price-marker-shell, .room-cluster-shell').count(), { timeout: 20_000 }).toBeGreaterThan(0)
+    await page.waitForTimeout(350)
+  }
 }
 
 async function shot(page: Page, name: string, mask: Locator[] = []) {

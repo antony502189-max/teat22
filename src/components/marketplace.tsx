@@ -275,7 +275,7 @@ export function SearchBar({ compact = false, home = false }: { compact?: boolean
       onSubmit={submit}
       role="search"
     >
-      {home ? <FieldGroup className="home-tenant-field"><Field><UsersRound className="home-search-field__icon" aria-hidden="true" /><FieldLabel htmlFor="home-tenant-requirement">¿Quién vivirá?</FieldLabel><select id="home-tenant-requirement" aria-label={t("Para quién")} value={filters.tenantRequirement} onChange={(event) => setFilters({ ...filters, tenantRequirement: event.target.value as Filters["tenantRequirement"] })}>{tenantOptions.map(([value, label]) => <option key={value} value={value}>{home && value === "Cualquiera" ? "Cualquiera" : home ? label.split(": ").at(-1) : label}</option>)}</select></Field></FieldGroup> : null}
+      {home ? <FieldGroup className="home-tenant-field"><Field><UsersRound className="home-search-field__icon" aria-hidden="true" /><FieldLabel htmlFor="home-tenant-requirement">¿Quién vivirá?</FieldLabel><select id="home-tenant-requirement" aria-label={t("Para quién")} value={filters.tenantRequirement} onChange={(event) => setFilters({ ...filters, tenantRequirement: event.target.value as Filters["tenantRequirement"] })}>{tenantOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field></FieldGroup> : null}
       <SearchLocationInput home={home} value={query} error={locationError} onChange={(value) => { setQuery(value); if (locationError) setLocationError(""); }} />
       {compact || home ? null : (
         <div className="search-date">
@@ -312,7 +312,7 @@ export function LocationSelector({
   currentQuery?: string;
   onLocationSelect?: (query: string) => void;
 }) {
-  const { allListings, mapPolygon, clearMapPolygon } = useApp();
+  const { allListings, rentalMode, mapPolygon, clearMapPolygon } = useApp();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(selected);
@@ -350,8 +350,8 @@ export function LocationSelector({
         <DialogHeader className="location-selector-dialog__header">
           {showZoneList ? <Button type="button" variant="ghost" size="icon" onClick={() => setShowZoneList(false)} aria-label="Volver a las opciones de ubicación"><ArrowLeft /></Button> : <DialogClose asChild><Button type="button" variant="ghost" size="icon" aria-label="Volver"><ArrowLeft /></Button></DialogClose>}
           <div>
-            <DialogTitle>{showZoneList ? "Seleccionar municipios" : "¿Dónde buscas?"}</DialogTitle>
-            <DialogDescription>{showZoneList ? "Elige uno o varios municipios reales de Tenerife." : "Busca en Tenerife por municipio, barrio o zona."}</DialogDescription>
+            <DialogTitle>{showZoneList ? "Seleccionar zonas" : "¿Dónde buscas?"}</DialogTitle>
+            <DialogDescription>{showZoneList ? "Explora municipios, distritos y barrios con límites oficiales disponibles." : "Busca en Tenerife por municipio, barrio o zona."}</DialogDescription>
           </div>
         </DialogHeader>
         <div className={cn("location-dialog-primary", showZoneList && "is-hidden")}>
@@ -370,18 +370,18 @@ export function LocationSelector({
           </div> : null}
           <div className="location-action-list" aria-label="También puedes">
             <span>También puedes:</span>
-            <button type="button" onClick={() => setShowZoneList(true)}><MapIcon aria-hidden="true" /><strong>Seleccionar municipios en el mapa</strong><ChevronRight aria-hidden="true" /></button>
+            <button type="button" onClick={() => setShowZoneList(true)}><MapIcon aria-hidden="true" /><strong>Seleccionar zonas en el mapa</strong><ChevronRight aria-hidden="true" /></button>
             <Link to="/buscar?vista=mapa&dibujar=1"><Pencil aria-hidden="true" /><strong>Dibujar tu zona</strong><ChevronRight aria-hidden="true" /></Link>
             <Link to="/buscar?vista=mapa"><MapPin aria-hidden="true" /><strong>Buscar en el mapa</strong><ChevronRight aria-hidden="true" /></Link>
             <Link to="/buscar?vista=mapa&cerca=1"><Crosshair aria-hidden="true" /><strong>Buscar alrededor de ti</strong><ChevronRight aria-hidden="true" /></Link>
           </div>
-          <Button type="button" variant="ghost" className="location-zones-toggle" onClick={() => setShowZoneList(true)}>Seleccionar municipios <ChevronRight data-icon="inline-end" /></Button>
+          <Button type="button" variant="ghost" className="location-zones-toggle" onClick={() => setShowZoneList(true)}>Seleccionar zonas <ChevronRight data-icon="inline-end" /></Button>
         </div>
         <div className={cn("location-zones-panel", showZoneList && "is-open")}>
-          <Suspense fallback={<div className="map-loading map-loading--standalone" role="status">Cargando municipios…</div>}>
+          <Suspense fallback={<div className="map-loading map-loading--standalone" role="status">Cargando zonas…</div>}>
             <LazyZoneSelectionMap
               selectedZoneIds={draft}
-              listings={allListings}
+              listings={allListings.filter((listing) => listing.rentalMode === rentalMode)}
               onChange={setDraft}
               onDraw={() => {
                 setDraft([]);
