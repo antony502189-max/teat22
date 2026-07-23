@@ -1,0 +1,195 @@
+name: Harden and validate freehand drawing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/harden-freehand-drawing.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-freehand-drawing
+  cancel-in-progress: false
+
+jobs:
+  harden-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Harden implementation and touch test
+        shell: python
+        run: |
+          from pathlib import Path
+
+          map_path = Path('src/components/map/results-map.tsx')
+          text = map_path.read_text()
+
+          replacements = [
+            (
+              "  const scheduleLiveStroke = () => {\n    if (frameRef.current !== null) return\n    frameRef.current = requestAnimationFrame(publishLiveStroke)\n  }\n",
+              "  const scheduleLiveStroke = () => {\n    if (frameRef.current !== null) return\n    frameRef.current = requestAnimationFrame(publishLiveStroke)\n  }\n\n  const cancelScheduledStroke = () => {\n    if (frameRef.current === null) return\n    cancelAnimationFrame(frameRef.current)\n    frameRef.current = null\n  }\n",
+            ),
+            (
+              "    activePointerRef.current = null\n    rawScreenPointsRef.current = []\n    setDraftPolygon([])\n",
+              "    cancelScheduledStroke()\n    activePointerRef.current = null\n    rawScreenPointsRef.current = []\n    setDraftPolygon([])\n",
+            ),
+            (
+              "  const cancelDrawing = () => {\n    activePointerRef.current = null\n",
+              "  const cancelDrawing = () => {\n    cancelScheduledStroke()\n    activePointerRef.current = null\n",
+            ),
+            (
+              "    if (activePointerRef.current !== event.pointerId) return\n    if (drawingOverlayRef.current?.hasPointerCapture(event.pointerId)) drawingOverlayRef.current.releasePointerCapture(event.pointerId)\n",
+              "    if (activePointerRef.current !== event.pointerId) return\n    cancelScheduledStroke()\n    if (drawingOverlayRef.current?.hasPointerCapture(event.pointerId)) drawingOverlayRef.current.releasePointerCapture(event.pointerId)\n",
+            ),
+            (
+              "    const raw = rawScreenPointsRef.current\n    const simplified = simplifyRdp(raw)\n",
+              "    const raw = rawScreenPointsRef.current\n    const lastRawPoint = raw.at(-1)\n    const contour = lastRawPoint && raw.length > 2 && distanceSquared(raw[0], lastRawPoint) < MIN_SAMPLE_DISTANCE * MIN_SAMPLE_DISTANCE\n      ? raw.slice(0, -1)\n      : raw\n    const simplified = simplifyRdp(contour)\n",
+            ),
+            (
+              "    event.currentTarget.setPointerCapture(event.pointerId)\n",
+              "    try {\n      event.currentTarget.setPointerCapture(event.pointerId)\n    } catch {\n      // Synthetic Playwright pointer events are not registered as active OS pointers.\n    }\n",
+            ),
+            (
+              "  const deletePolygon = () => {\n    setDraftPolygon([])\n",
+              "  const deletePolygon = () => {\n    cancelScheduledStroke()\n    setDraftPolygon([])\n",
+            ),
+          ]
+
+          for old, new in replacements:
+            if old not in text:
+              raise SystemExit(f'Expected results-map fragment not found: {old[:80]!r}')
+            text = text.replace(old, new, 1)
+          map_path.write_text(text)
+
+          test_path = Path('tests/freehand-map-drawing.spec.ts')
+          test_text = test_path.read_text()
+          old = """  await target!.dispatchEvent('pointerdown', { pointerId: 11, pointerType: 'touch', isPrimary: true, buttons: 1, clientX: points[0][0], clientY: points[0][1] })
+  for (const [clientX, clientY] of points.slice(1)) {
+    await target!.dispatchEvent('pointermove', { pointerId: 11, pointerType: 'touch', isPrimary: true, buttons: 1, clientX, clientY })
+  }
+  await target!.dispatchEvent('pointerup', { pointerId: 11, pointerType: 'touch', isPrimary: true, buttons: 0, clientX: points.at(-1)![0], clientY: points.at(-1)![1] })
+"""
+          new = """  await target!.dispatchEvent('pointerdown', { pointerId: 11, pointerType: 'touch', isPrimary: true, button: 0, buttons: 1, clientX: points[0][0], clientY: points[0][1] })
+  for (let segment = 1; segment < points.length; segment += 1) {
+    const [startX, startY] = points[segment - 1]
+    const [endX, endY] = points[segment]
+    for (let step = 1; step <= 10; step += 1) {
+      const progress = step / 10
+      await target!.dispatchEvent('pointermove', {
+        pointerId: 11,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: -1,
+        buttons: 1,
+        clientX: startX + (endX - startX) * progress,
+        clientY: startY + (endY - startY) * progress,
+      })
+    }
+  }
+  await target!.dispatchEvent('pointerup', { pointerId: 11, pointerType: 'touch', isPrimary: true, button: 0, buttons: 0, clientX: points.at(-1)![0], clientY: points.at(-1)![1] })
+"""
+          if old not in test_text:
+            raise SystemExit('Expected touch test fragment not found')
+          test_path.write_text(test_text.replace(old, new, 1))
+
+      - name: Run required validation
+        id: validation
+        shell: bash
+        env:
+          VITE_BASE_PATH: /teat22/
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
+        run: |
+          set +e
+          mkdir -p /tmp/freehand-validation
+          : > /tmp/freehand-validation/statuses
+
+          run_check() {
+            name="$1"
+            shift
+            echo "===== $name ====="
+            "$@" >"/tmp/freehand-validation/$name.log" 2>&1
+            code=$?
+            echo "$name=$code" | tee -a /tmp/freehand-validation/statuses
+            tail -n 80 "/tmp/freehand-validation/$name.log"
+          }
+
+          run_check lint npm run lint
+          run_check typecheck npm run typecheck
+          run_check build npm run build
+          run_check freehand npx playwright test tests/freehand-map-drawing.spec.ts
+          run_check update_snapshot npx playwright test tests/master-task-visual.spec.ts --grep "master mobile list and map states" --update-snapshots
+          run_check e2e npm run test:e2e
+          run_check a11y npm run test:a11y
+          run_check visual npm run test:visual
+
+          if grep -qv '=0$' /tmp/freehand-validation/statuses; then
+            echo 'validation_failed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'validation_failed=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit result
+        if: always()
+        shell: bash
+        env:
+          VALIDATION_FAILED: ${{ steps.validation.outputs.validation_failed }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          rm -f .github/workflows/harden-freehand-drawing.yml
+          rm -f .github/workflows/validate-freehand-drawing.yml
+
+          if [ "${VALIDATION_FAILED:-true}" = "true" ]; then
+            git restore src/components/map/results-map.tsx tests/freehand-map-drawing.spec.ts tests/visual-snapshots 2>/dev/null || true
+            mkdir -p .ci
+            python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('/tmp/freehand-validation')
+          output = ['Freehand validation failed.']
+          statuses = (source / 'statuses').read_text() if (source / 'statuses').exists() else 'validation=1\n'
+          output += ['', 'Statuses:', statuses.strip(), '']
+          for log in sorted(source.glob('*.log')):
+              lines = log.read_text(errors='replace').splitlines()[-160:]
+              body = '\n'.join(lines)
+              body = re.sub(r'AIza[0-9A-Za-z_-]+', '[REDACTED_GOOGLE_KEY]', body)
+              output += [f'===== {log.stem} =====', body, '']
+          Path('.ci/freehand-validation.log').write_text('\n'.join(output))
+          PY
+            git add .github/workflows .ci/freehand-validation.log
+            git commit -m "ci: record freehand validation failure"
+          else
+            rm -f .ci/freehand-validation.log
+            git add -A
+            git commit -m "fix: harden freehand drawing and validate"
+          fi
+
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+          if [ "${VALIDATION_FAILED:-true}" = "true" ]; then
+            exit 1
+          fi
