@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: validate-freehand-drawing
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   playwright:
@@ -30,18 +30,32 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        id: install
+        continue-on-error: true
         run: npm ci
 
       - name: Install Chromium
+        id: chromium
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         run: npx playwright install --with-deps chromium
 
       - name: Lint
+        id: lint
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         run: npm run lint
 
       - name: Typecheck
+        id: typecheck
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         run: npm run typecheck
 
       - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
         run: npm run build
         env:
           VITE_BASE_PATH: /teat22/
@@ -49,28 +63,59 @@ jobs:
           VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
 
       - name: E2E
+        id: e2e
+        if: steps.chromium.outcome == 'success'
+        continue-on-error: true
         run: npm run test:e2e
         env:
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
 
       - name: Accessibility
+        id: a11y
+        if: steps.chromium.outcome == 'success'
+        continue-on-error: true
         run: npm run test:a11y
         env:
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
 
       - name: Visual
+        id: visual
+        if: steps.chromium.outcome == 'success'
+        continue-on-error: true
         run: npm run test:visual
         env:
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
 
-      - name: Remove temporary workflow
+      - name: Persist validation report
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          CHROMIUM: ${{ steps.chromium.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
+          A11Y: ${{ steps.a11y.outcome }}
+          VISUAL: ${{ steps.visual.outcome }}
         run: |
+          cat > .github/freehand-validation.md <<REPORT
+          # Freehand drawing validation
+
+          - npm ci: $INSTALL
+          - playwright chromium: $CHROMIUM
+          - npm run lint: $LINT
+          - npm run typecheck: $TYPECHECK
+          - npm run build: $BUILD
+          - npm run test:e2e: $E2E
+          - npm run test:a11y: $A11Y
+          - npm run test:visual: $VISUAL
+          REPORT
           rm .github/workflows/validate-freehand-drawing.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/validate-freehand-drawing.yml
-          git commit -m "chore: complete freehand validation"
+          git add .github/freehand-validation.md .github/workflows/validate-freehand-drawing.yml
+          git commit -m "test: record freehand validation results"
           git push origin HEAD:main
