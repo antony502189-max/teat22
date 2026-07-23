@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer'
 import { MapPin } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,6 +12,7 @@ import { TENERIFE_BOUNDS, TENERIFE_CENTER, TENERIFE_DEFAULT_ZOOM, isInsideTeneri
 import { AdvancedClusterRenderer, createPriceMarkerContent, priceLabel, setPriceMarkerState } from '@/components/map/map-icons'
 import { MapLayerSwitcher, MapToolbar } from '@/components/map/map-toolbar'
 import { SelectedListingSheet } from '@/components/map/selected-listing-sheet'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Listing, MapPolygonPoint } from '@/types'
 import '@/map.css'
@@ -39,6 +40,12 @@ export interface ResultsMapProps {
   onInitialActionHandled?: () => void
 }
 
+type ScreenPoint = { x: number; y: number }
+
+const MIN_SAMPLE_DISTANCE = 5
+const MIN_CONTOUR_AREA = 900
+const SIMPLIFY_TOLERANCE = 2.5
+
 const boundsAreEqual = (left: MapBounds, right: MapBounds) =>
   (Object.keys(left) as (keyof MapBounds)[]).every((key) => Math.abs(left[key] - right[key]) < 0.00001)
 
@@ -58,8 +65,6 @@ function fitListings(map: google.maps.Map, listings: Listing[]) {
   map.fitBounds(bounds, isCompact
     ? { top: 96, right: 42, bottom: 118, left: 42 }
     : { top: 72, right: 72, bottom: 72, left: 72 })
-  // Google may animate fitBounds differently while a split pane is settling.
-  // Pinning the computed center keeps desktop and mobile geometry deterministic.
   map.setCenter(bounds.getCenter())
   google.maps.event.addListenerOnce(map, 'idle', () => {
     const zoom = map.getZoom() ?? 0
@@ -68,16 +73,57 @@ function fitListings(map: google.maps.Map, listings: Listing[]) {
   })
 }
 
+const distanceSquared = (left: ScreenPoint, right: ScreenPoint) => {
+  const dx = left.x - right.x
+  const dy = left.y - right.y
+  return dx * dx + dy * dy
+}
+
+const perpendicularDistance = (point: ScreenPoint, start: ScreenPoint, end: ScreenPoint) => {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  if (dx === 0 && dy === 0) return Math.sqrt(distanceSquared(point, start))
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)))
+  const projected = { x: start.x + t * dx, y: start.y + t * dy }
+  return Math.sqrt(distanceSquared(point, projected))
+}
+
+function simplifyRdp(points: ScreenPoint[], tolerance = SIMPLIFY_TOLERANCE): ScreenPoint[] {
+  if (points.length <= 2) return points
+  let maxDistance = 0
+  let splitIndex = 0
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const distance = perpendicularDistance(points[index], points[0], points[points.length - 1])
+    if (distance > maxDistance) {
+      maxDistance = distance
+      splitIndex = index
+    }
+  }
+  if (maxDistance <= tolerance) return [points[0], points[points.length - 1]]
+  const left = simplifyRdp(points.slice(0, splitIndex + 1), tolerance)
+  const right = simplifyRdp(points.slice(splitIndex), tolerance)
+  return [...left.slice(0, -1), ...right]
+}
+
+const polygonArea = (points: ScreenPoint[]) => Math.abs(points.reduce((sum, point, index) => {
+  const next = points[(index + 1) % points.length]
+  return sum + point.x * next.y - next.x * point.y
+}, 0) / 2)
+
 export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighlight, fullScreen = false, showPreview = true, onBoundsSearch, onPolygonSearch, onDrawingStart, fitResultsKey = 0, initialAction = null, onInitialActionHandled }: ResultsMapProps) {
   const { filters, mapPolygon, setMapPolygon, clearMapPolygon } = useApp()
   const containerRef = useRef<HTMLDivElement>(null)
+  const drawingOverlayRef = useRef<HTMLDivElement>(null)
+  const projectionOverlayRef = useRef<google.maps.OverlayView | null>(null)
   const mapRef = useRef<google.maps.Map | null>(null)
   const clusterRef = useRef<MarkerClusterer | null>(null)
   const markersRef = useRef(new Map<string, google.maps.marker.AdvancedMarkerElement>())
   const markerContentRef = useRef(new Map<string, HTMLElement>())
   const drawingLayerRef = useRef<google.maps.Polygon | google.maps.Polyline | null>(null)
-  const vertexMarkersRef = useRef<google.maps.marker.AdvancedMarkerElement[]>([])
   const drawingRef = useRef(false)
+  const activePointerRef = useRef<number | null>(null)
+  const rawScreenPointsRef = useRef<ScreenPoint[]>([])
+  const frameRef = useRef<number | null>(null)
   const onSelectRef = useRef(onSelect)
   const onHighlightRef = useRef(onHighlight)
   const itemsRef = useRef(items)
@@ -124,11 +170,12 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     let initializedMap: google.maps.Map | null = null
     const listeners: google.maps.MapsEventListener[] = []
     const markZoomIntent = () => {
+      if (drawingRef.current) return
       programmaticMoveRef.current = false
       manualMovePendingRef.current = true
     }
     const markKeyboardZoomIntent = (event: KeyboardEvent) => {
-      if (event.key === '+' || event.key === '-' || event.key === '=') {
+      if (!drawingRef.current && (event.key === '+' || event.key === '-' || event.key === '=')) {
         programmaticMoveRef.current = false
         manualMovePendingRef.current = true
       }
@@ -152,14 +199,16 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         clickableIcons: false,
         keyboardShortcuts: true,
         gestureHandling: 'greedy',
-        restriction: {
-          latLngBounds: TENERIFE_BOUNDS,
-          // A hard restriction forces a tall mobile viewport to zoom into only
-          // half of Tenerife. Keep the island as a soft pan boundary so the
-          // initial fit can show the complete result set like a property map.
-          strictBounds: false,
-        },
+        restriction: { latLngBounds: TENERIFE_BOUNDS, strictBounds: false },
       })
+      class ProjectionOverlay extends google.maps.OverlayView {
+        onAdd() {}
+        draw() {}
+        onRemove() {}
+      }
+      const projectionOverlay = new ProjectionOverlay()
+      projectionOverlay.setMap(map)
+      projectionOverlayRef.current = projectionOverlay
       mapRef.current = map
       initializedMap = map
       containerRef.current.dataset.mapInstance = 'google-ready'
@@ -178,15 +227,12 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         }
       }
       const markManualMove = () => {
+        if (drawingRef.current) return
         programmaticMoveRef.current = false
         manualMovePendingRef.current = true
       }
       listeners.push(map.addListener('idle', updateBounds))
       listeners.push(map.addListener('dragstart', markManualMove))
-      listeners.push(map.addListener('click', (event: google.maps.MapMouseEvent) => {
-        if (!drawingRef.current || !event.latLng) return
-        setDraftPolygon((current) => [...current, { lat: event.latLng!.lat(), lng: event.latLng!.lng() }])
-      }))
       resizeObserver = new ResizeObserver(() => {
         const center = fittedResultsRef.current ? map.getCenter() : null
         google.maps.event.trigger(map, 'resize')
@@ -216,6 +262,8 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
       container.removeEventListener('wheel', markZoomIntent)
       container.removeEventListener('keydown', markKeyboardZoomIntent)
       window.removeEventListener(GOOGLE_MAPS_AUTH_FAILURE_EVENT, handleAuthFailure)
+      projectionOverlayRef.current?.setMap(null)
+      projectionOverlayRef.current = null
       if (initializedMap) google.maps.event.clearInstanceListeners(initializedMap)
       mapRef.current = null
       fittedResultsRef.current = false
@@ -226,6 +274,14 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
   useEffect(() => {
     mapRef.current?.setMapTypeId(getGoogleMapType(layer))
   }, [layer])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready) return
+    map.setOptions(drawing
+      ? { gestureHandling: 'none', draggable: false, keyboardShortcuts: false, disableDoubleClickZoom: true }
+      : { gestureHandling: 'greedy', draggable: true, keyboardShortcuts: true, disableDoubleClickZoom: false })
+  }, [drawing, ready])
 
   useEffect(() => {
     const map = mapRef.current
@@ -348,20 +404,12 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
         properties: { ...feature.properties, id: municipalityZoneId(feature.properties.id || feature.properties.label) },
       }))
       map.data.addGeoJson({ type: 'FeatureCollection', features: [...municipalityFeatures, ...(hierarchy?.features ?? [])] } as unknown as GeoJSON.GeoJsonObject)
-      map.data.setStyle((feature) => {
-        const selectedArea = selectedAreas.has(canonicalizeZoneId(String(feature.getProperty('id') ?? '')))
-        return {
-          visible: selectedArea,
-          fillColor: '#c51a84',
-          fillOpacity: .2,
-          strokeColor: '#9e176d',
-          strokeOpacity: 1,
-          strokeWeight: 3,
-          zIndex: 2,
-        }
-      })
+      map.data.setStyle((feature) => ({
+        visible: selectedAreas.has(canonicalizeZoneId(String(feature.getProperty('id') ?? ''))),
+        fillColor: '#c51a84', fillOpacity: .2, strokeColor: '#9e176d', strokeOpacity: 1, strokeWeight: 3, zIndex: 2,
+      }))
     }).catch(() => {
-      if (!cancelled) setMapError('No se pudieron cargar los l\u00edmites seleccionados. El resto del mapa sigue disponible.')
+      if (!cancelled) setMapError('No se pudieron cargar los límites seleccionados. El resto del mapa sigue disponible.')
     })
     return () => { cancelled = true }
   }, [ready, selectedAreaSignature])
@@ -371,40 +419,34 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     if (!map || !ready) return
     drawingLayerRef.current?.setMap(null)
     drawingLayerRef.current = null
-    vertexMarkersRef.current.forEach((marker) => { marker.map = null })
-    vertexMarkersRef.current = []
     if (draftPolygon.length >= 3) {
-      drawingLayerRef.current = new google.maps.Polygon({
+      const polygon = new google.maps.Polygon({
         map,
         paths: draftPolygon,
         clickable: false,
-        strokeColor: '#9e176d',
-        strokeOpacity: 1,
-        strokeWeight: 3,
-        fillColor: '#c51a84',
-        fillOpacity: .22,
-        zIndex: 5,
+        editable: drawSession && !drawing,
+        strokeColor: '#9e176d', strokeOpacity: 1, strokeWeight: 3,
+        fillColor: '#c51a84', fillOpacity: .22, zIndex: 5,
       })
+      drawingLayerRef.current = polygon
+      if (drawSession && !drawing) {
+        const syncPath = () => setDraftPolygon(polygon.getPath().getArray().map((point) => ({ lat: point.lat(), lng: point.lng() })))
+        const setListener = polygon.getPath().addListener('set_at', syncPath)
+        const insertListener = polygon.getPath().addListener('insert_at', syncPath)
+        const removeListener = polygon.getPath().addListener('remove_at', syncPath)
+        return () => {
+          setListener.remove(); insertListener.remove(); removeListener.remove(); polygon.setMap(null)
+        }
+      }
     } else if (draftPolygon.length >= 2) {
       drawingLayerRef.current = new google.maps.Polyline({ map, path: draftPolygon, clickable: false, strokeColor: '#9e176d', strokeWeight: 3, zIndex: 5 })
     }
-    if (drawing) {
-      vertexMarkersRef.current = draftPolygon.map((position, index) => {
-        const point = document.createElement('span')
-        point.className = 'map-drawing-vertex'
-        point.textContent = String(index + 1)
-        return new google.maps.marker.AdvancedMarkerElement({ map, position, content: point, zIndex: 4000 + index })
-      })
-    }
-    return () => {
-      drawingLayerRef.current?.setMap(null)
-      vertexMarkersRef.current.forEach((marker) => { marker.map = null })
-    }
-  }, [draftPolygon, drawing, ready])
+    return () => drawingLayerRef.current?.setMap(null)
+  }, [draftPolygon, drawSession, drawing, ready])
 
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !ready || mapPolygon.length < 3) return
+    if (!map || !ready || mapPolygon.length < 3 || drawSession) return
     const signature = mapPolygon.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(';')
     if (fittedPolygonSignatureRef.current === signature) return
     fittedPolygonSignatureRef.current = signature
@@ -414,64 +456,140 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     setBoundsDirty(false)
     map.fitBounds(polygonBounds, { top: 72, right: 32, bottom: 96, left: 32 })
     google.maps.event.addListenerOnce(map, 'idle', () => { programmaticMoveRef.current = false })
-  }, [mapPolygon, ready])
+  }, [drawSession, mapPolygon, ready])
+
+  const screenToLatLng = (point: ScreenPoint) => {
+    const projection = projectionOverlayRef.current?.getProjection()
+    if (!projection) return null
+    const latLng = projection.fromContainerPixelToLatLng(new google.maps.Point(point.x, point.y))
+    return latLng ? { lat: latLng.lat(), lng: latLng.lng() } : null
+  }
+
+  const publishLiveStroke = () => {
+    frameRef.current = null
+    const converted = rawScreenPointsRef.current.map(screenToLatLng).filter((point): point is MapPolygonPoint => Boolean(point))
+    setDraftPolygon(converted)
+  }
+
+  const scheduleLiveStroke = () => {
+    if (frameRef.current !== null) return
+    frameRef.current = requestAnimationFrame(publishLiveStroke)
+  }
 
   const startDrawing = () => {
     if (onDrawingStart?.() === false) return
     onSelectRef.current('')
     setFocusSheetOnOpen(false)
+    activePointerRef.current = null
+    rawScreenPointsRef.current = []
     setDraftPolygon([])
     setDrawSession(true)
     setDrawing(true)
-    setActionAnnouncement('Modo dibujo activado. La zona dibujada sustituye a las zonas municipales. A\u00f1ade al menos 3 puntos.')
+    setActionAnnouncement('Modo dibujo activado. Mantén pulsado y dibuja una zona con el ratón, el dedo o el lápiz.')
   }
-  const cancelDrawing = () => { setDraftPolygon(mapPolygon); setDrawing(false); setDrawSession(false) }
-  const addKeyboardPoint = () => {
-    const map = mapRef.current
-    const center = map?.getCenter()
-    if (!center) return
-    const offsets = [[-.08, -.08], [.08, -.08], [0, .09], [-.08, .08]]
-    const offset = offsets[draftPolygon.length % offsets.length]
-    setDraftPolygon((current) => [...current, { lat: center.lat() + offset[0], lng: center.lng() + offset[1] }])
+
+  const cancelDrawing = () => {
+    activePointerRef.current = null
+    rawScreenPointsRef.current = []
+    setDraftPolygon(mapPolygon)
+    setDrawing(false)
+    setDrawSession(false)
+    setActionAnnouncement('Dibujo cancelado.')
   }
-  const finishDrawing = () => {
+
+  const finishPointerDrawing = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
+    if (activePointerRef.current !== event.pointerId) return
+    if (drawingOverlayRef.current?.hasPointerCapture(event.pointerId)) drawingOverlayRef.current.releasePointerCapture(event.pointerId)
+    activePointerRef.current = null
+    if (cancelled) {
+      rawScreenPointsRef.current = []
+      setDraftPolygon([])
+      setActionAnnouncement('Trazo cancelado. Dibuja de nuevo.')
+      return
+    }
+    const raw = rawScreenPointsRef.current
+    const simplified = simplifyRdp(raw)
+    const area = polygonArea(simplified)
+    const converted = simplified.map(screenToLatLng).filter((point): point is MapPolygonPoint => Boolean(point))
+    const unique = new Set(converted.map((point) => `${point.lat.toFixed(7)},${point.lng.toFixed(7)}`))
+    if (raw.length < 6 || converted.length < 3 || unique.size < 3 || area < MIN_CONTOUR_AREA) {
+      rawScreenPointsRef.current = []
+      setDraftPolygon([])
+      setActionAnnouncement('La zona es demasiado pequeña o no es válida. Dibuja un contorno más amplio.')
+      toast.error('La zona dibujada es demasiado pequeña. Inténtalo de nuevo.')
+      return
+    }
+    setDraftPolygon(converted)
+    setDrawing(false)
+    setActionAnnouncement(`Zona preparada con ${converted.length} vértices. Puedes editarla antes de aplicarla.`)
+  }
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drawing || activePointerRef.current !== null || event.button > 0) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    activePointerRef.current = event.pointerId
+    rawScreenPointsRef.current = [point]
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDraftPolygon([])
+    scheduleLiveStroke()
+  }
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drawing || activePointerRef.current !== event.pointerId) return
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const last = rawScreenPointsRef.current.at(-1)
+    if (last && distanceSquared(last, point) < MIN_SAMPLE_DISTANCE * MIN_SAMPLE_DISTANCE) return
+    rawScreenPointsRef.current.push(point)
+    scheduleLiveStroke()
+  }
+
+  const applyDrawing = () => {
     if (draftPolygon.length < 3) return
     setDrawing(false)
+    setDrawSession(false)
     setMapPolygon(draftPolygon)
     onPolygonSearch?.(draftPolygon)
-    setActionAnnouncement(`Zona dibujada aplicada con ${draftPolygon.length} puntos.`)
-    toast.success(`Zona aplicada: ${draftPolygon.length} puntos`)
+    setActionAnnouncement(`Zona dibujada aplicada con ${draftPolygon.length} vértices.`)
+    toast.success('Zona dibujada aplicada')
   }
+
   const deletePolygon = () => {
     setDraftPolygon([])
     clearMapPolygon()
     onPolygonSearch?.([])
+    setDrawing(false)
     setDrawSession(false)
     setActionAnnouncement('Zona dibujada eliminada.')
   }
+
   const locateCurrentPosition = () => {
-    if (!navigator.geolocation) { toast.error('Tu navegador no ofrece geolocalizaci\u00f3n'); return }
+    if (!navigator.geolocation) { toast.error('Tu navegador no ofrece geolocalización'); return }
     if (geolocationPendingRef.current) return
     geolocationPendingRef.current = true
     navigator.geolocation.getCurrentPosition(({ coords }) => {
       geolocationPendingRef.current = false
       const current = { lat: coords.latitude, lng: coords.longitude }
       if (!isInsideTenerife(current)) {
-        setActionAnnouncement('Tu ubicaci\u00f3n est\u00e1 fuera de Tenerife. El mapa permanece en la isla.')
-        toast.error('Tu ubicaci\u00f3n est\u00e1 fuera de Tenerife.')
+        setActionAnnouncement('Tu ubicación está fuera de Tenerife. El mapa permanece en la isla.')
+        toast.error('Tu ubicación está fuera de Tenerife.')
         return
       }
       programmaticMoveRef.current = true
       mapRef.current?.setCenter(current)
       mapRef.current?.setZoom(14)
       if (mapRef.current) google.maps.event.addListenerOnce(mapRef.current, 'idle', () => { programmaticMoveRef.current = false })
-      setActionAnnouncement('Ubicaci\u00f3n encontrada en Tenerife.')
+      setActionAnnouncement('Ubicación encontrada en Tenerife.')
     }, () => {
       geolocationPendingRef.current = false
-      setActionAnnouncement('No pudimos obtener tu ubicaci\u00f3n. Puedes mover el mapa manualmente.')
-      toast.error('No pudimos obtener tu ubicaci\u00f3n.')
+      setActionAnnouncement('No pudimos obtener tu ubicación. Puedes mover el mapa manualmente.')
+      toast.error('No pudimos obtener tu ubicación.')
     }, { timeout: 7000 })
   }
+
   const searchBounds = () => {
     if (!bounds || !onBoundsSearch || !boundsDirty) return
     if (lastSearchedBoundsRef.current && boundsAreEqual(bounds, lastSearchedBoundsRef.current)) { setBoundsDirty(false); return }
@@ -479,7 +597,7 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     onBoundsSearch(bounds)
     lastSearchedBoundsRef.current = bounds
     setBoundsDirty(false)
-    setActionAnnouncement('Resultados actualizados para el \u00e1rea visible.')
+    setActionAnnouncement('Resultados actualizados para el área visible.')
   }
 
   useEffect(() => {
@@ -489,14 +607,37 @@ export function ResultsMap({ items, selectedId, highlightedId, onSelect, onHighl
     if (initialAction === 'draw') startDrawing()
     else locateCurrentPosition()
     onInitialActionHandled?.()
-  // The action token and readiness intentionally control this one-shot effect.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialAction, onInitialActionHandled, ready])
 
-  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', selected && 'has-selection', drawing && 'is-drawing', drawSession && 'is-draw-session', mapPolygon.length >= 3 && 'has-polygon', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-provider="google-maps">
+  useEffect(() => () => {
+    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+  }, [])
+
+  return <section className={cn('results-map google-map-shell', fullScreen && 'results-map--fullscreen google-map-shell--fullscreen', selected && 'has-selection', drawing && 'is-drawing', drawSession && 'is-draw-session', mapPolygon.length >= 3 && 'has-polygon', mapError && 'has-map-error')} aria-label="Mapa de resultados" data-drawing={drawing || undefined} data-draw-session={drawSession || undefined} data-provider="google-maps">
     <div className="results-map__canvas google-map-canvas" ref={containerRef} role="application" aria-label="Google Maps con precios de habitaciones" />
+    {drawing ? <div
+      ref={drawingOverlayRef}
+      className="map-freehand-overlay"
+      data-testid="map-freehand-overlay"
+      aria-label="Área de dibujo libre sobre el mapa"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(event) => finishPointerDrawing(event)}
+      onPointerCancel={(event) => finishPointerDrawing(event, true)}
+      onContextMenu={(event) => event.preventDefault()}
+      style={{ position: 'absolute', inset: 0, zIndex: 7, cursor: 'crosshair', touchAction: 'none', userSelect: 'none' }}
+    /> : null}
     <MapLayerSwitcher value={layer} onChange={setLayer} />
-    {fullScreen ? <MapToolbar boundsDirty={boundsDirty} canSearchBounds={Boolean(boundsDirty && bounds && onBoundsSearch)} drawing={drawing} pointCount={draftPolygon.length} hasPolygon={mapPolygon.length >= 3} onSearchBounds={searchBounds} onLocate={locateCurrentPosition} onStartDrawing={startDrawing} onAddPoint={addKeyboardPoint} onCancelDrawing={cancelDrawing} onFinishDrawing={finishDrawing} onDeletePolygon={deletePolygon} /> : null}
+    {fullScreen && !drawSession ? <MapToolbar boundsDirty={boundsDirty} canSearchBounds={Boolean(boundsDirty && bounds && onBoundsSearch)} drawing={false} pointCount={draftPolygon.length} hasPolygon={mapPolygon.length >= 3} onSearchBounds={searchBounds} onLocate={locateCurrentPosition} onStartDrawing={startDrawing} onAddPoint={() => undefined} onCancelDrawing={cancelDrawing} onFinishDrawing={applyDrawing} onDeletePolygon={deletePolygon} /> : null}
+    {fullScreen && drawSession ? <div className="map-freehand-actions" role="group" aria-label="Acciones de la zona dibujada" style={{ position: 'absolute', zIndex: 9, left: '50%', bottom: '1rem', transform: 'translateX(-50%)', display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '.4rem', width: 'min(42rem, calc(100% - 1.25rem))', pointerEvents: 'auto' }}>
+      {drawing ? <><span className="map-freehand-hint" role="status" style={{ alignSelf: 'center', padding: '.65rem .8rem', borderRadius: '.4rem', background: 'rgba(255,255,255,.96)', boxShadow: '0 .3rem .9rem rgb(25 31 31 / .24)', fontWeight: 700 }}>Mantén pulsado y dibuja el contorno</span><Button variant="outline" onClick={cancelDrawing}>Cancelar</Button></> : <>
+        <Button onClick={applyDrawing} disabled={draftPolygon.length < 3}>Aplicar zona</Button>
+        <Button variant="outline" onClick={startDrawing}>Volver a dibujar</Button>
+        <Button variant="outline" onClick={cancelDrawing}>Cancelar</Button>
+        {(mapPolygon.length >= 3 || draftPolygon.length >= 3) ? <Button variant="outline" onClick={deletePolygon}>Eliminar zona</Button> : null}
+      </>}
+    </div> : null}
     {actionAnnouncement ? <div ref={announcementRef} className="map-action-announcement" role="status" aria-live="polite" tabIndex={-1}>{actionAnnouncement}</div> : null}
     {!ready && !mapError ? <div className="map-loading" role="status" aria-live="polite"><span aria-hidden="true" /><strong>Cargando Google Maps</strong></div> : null}
     {googleMapsConfig.usesDevelopmentMapId ? <p className="map-dev-notice">Mapa de desarrollo: configura un Map ID propio antes de publicar.</p> : null}
